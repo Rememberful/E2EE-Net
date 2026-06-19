@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: e2ee-cyber-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: ALLOWED_ORIGINS
+        # Replace with your actual Render frontend URL after deploying frontend
+        value: https://e2ee-cyber-frontend.onrender.com
+    healthCheckPath: /health
+    autoDeploy: true
+
+  - type: web
+    name: e2ee-cyber-frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        # Replace with your actual Render backend URL after deploying backend
+        value: https://e2ee-cyber-backend.onrender.com
+    autoDeploy: true

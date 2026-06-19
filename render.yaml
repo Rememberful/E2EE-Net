@@ -9,19 +9,25 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: ALLOWED_ORIGINS
-        # Replace with your actual Render frontend URL after deploying frontend
-        value: https://e2ee-cyber-frontend.onrender.com
+        # Replace with your actual Render frontend URL
+        value: https://e2ee-net.onrender.com
     healthCheckPath: /health
     autoDeploy: true
 
   - type: web
     name: e2ee-cyber-frontend
-    runtime: node
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        # Replace with your actual Render backend URL after deploying backend
-        value: https://e2ee-cyber-backend.onrender.com
+        # Replace with your actual Render backend URL
+        value: https://e2ee-net-backend.onrender.com
+    routes:
+      # SPA fallback: any path with no matching static asset serves index.html.
+      # This is what makes /view/<id> load the React app instead of 404ing.
+      - type: rewrite
+        source: /*
+        destination: /index.html
     autoDeploy: true

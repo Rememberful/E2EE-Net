@@ -88,7 +88,7 @@ function Field({ label, value, color }) {
         {label}
       </div>
       <div className="mono-value" style={{ color: color || 'var(--text-primary)', fontSize: '13px', wordBreak: 'break-all' }}>
-        {value || '\u2014'}
+        {value || '—'}
       </div>
     </div>
   );
@@ -279,7 +279,7 @@ export default function App() {
       const { ciphertext, iv } = await encryptText(key, message);
 
       const rawKey = await exportKeyRaw(key);
-      log('Key exported to memory only \u2014 will be embedded in URL fragment, never sent to server.', 'accent');
+      log('Key exported to memory only — will be embedded in URL fragment, never sent to server.', 'accent');
 
       const body = {
         ciphertext,
@@ -305,7 +305,7 @@ export default function App() {
       const link = `${window.location.origin}/view/${result.id}#${rawKey}`;
       setShareLink({ url: link, mode: result.mode, expiresAt: result.expires_at });
 
-      log(`Note stored as ciphertext. id=${result.id.slice(0, 10)}\u2026 mode=${result.mode}`, 'success');
+      log(`Note stored as ciphertext. id=${result.id.slice(0, 10)}… mode=${result.mode}`, 'success');
       log('Server received zero key material. It cannot decrypt this note.', 'success');
 
       setMessage('');
@@ -325,7 +325,7 @@ export default function App() {
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 2000);
     } catch {
-      log('Clipboard write failed \u2014 copy the link manually.', 'warning');
+      log('Clipboard write failed — copy the link manually.', 'warning');
     }
   };
 
@@ -378,7 +378,7 @@ export default function App() {
             borderColor={readState === 'error' ? 'var(--danger)' : 'var(--border-base)'}
           >
             {readState === 'loading' && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Retrieving and decrypting\u2026</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Retrieving and decrypting…</div>
             )}
 
             {readState === 'error' && (
@@ -389,7 +389,7 @@ export default function App() {
               <>
                 {readState === 'burned' && (
                   <div style={{ marginBottom: '14px' }}>
-                    <Badge tone="warning">BURNED AFTER THIS READ \u2014 it no longer exists on the server</Badge>
+                    <Badge tone="warning">BURNED AFTER THIS READ — it no longer exists on the server</Badge>
                   </div>
                 )}
                 <div style={{
@@ -413,7 +413,7 @@ export default function App() {
 
   // ── Render: CREATE VIEW ────────────────────────────────────────────────
   const canSend = !!message.trim() && !creating;
-  const uptimeStr = serverInfo ? `${Math.floor(serverInfo.uptime_seconds / 60)}m ${serverInfo.uptime_seconds % 60}s` : '\u2014';
+  const uptimeStr = serverInfo ? `${Math.floor(serverInfo.uptime_seconds / 60)}m ${serverInfo.uptime_seconds % 60}s` : '—';
 
   return (
     <Shell theme={theme} onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} serverStatus={serverStatus}>
@@ -520,7 +520,7 @@ export default function App() {
           )}
 
           {/* Audit log */}
-          <Card title="VAULT AUDIT LOG" subtitle="Metadata only \u2014 no ciphertext, no keys, no plaintext ever recorded here.">
+          <Card title="VAULT AUDIT LOG" subtitle="Metadata only — no ciphertext, no keys, no plaintext ever recorded here.">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '11px' }}>
               <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Last 20 vault operations</span>
               <button
@@ -564,10 +564,10 @@ export default function App() {
           </Card>
 
           <Card title="SERVER METRICS">
-            <Field label="ENVIRONMENT" value={serverInfo?.environment?.toUpperCase() || '\u2014'} />
+            <Field label="ENVIRONMENT" value={serverInfo?.environment?.toUpperCase() || '—'} />
             <Field label="UPTIME" value={uptimeStr} />
-            <Field label="VAULT USED" value={serverInfo ? `${serverInfo.vault_used} / ${serverInfo.vault_capacity}` : '\u2014'} color="var(--accent)" />
-            <Field label="VERSION" value={serverInfo?.version || '\u2014'} />
+            <Field label="VAULT USED" value={serverInfo ? `${serverInfo.vault_used} / ${serverInfo.vault_capacity}` : '—'} color="var(--accent)" />
+            <Field label="VERSION" value={serverInfo?.version || '—'} />
           </Card>
 
           <Card title="WHY THIS IS ZERO-KNOWLEDGE">
@@ -582,7 +582,7 @@ export default function App() {
               </div>
               <div>
                 <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Burn after read</div>
-                One-time notes are deleted the instant they're served \u2014 even the server operator cannot re-read them.
+                One-time notes are deleted the instant they're served — even the server operator cannot re-read them.
               </div>
             </div>
           </Card>
@@ -627,7 +627,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
               </div>
             </a>
             <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              AES-256-GCM, client-side only \u2014 the server never holds a decryption key
+              AES-256-GCM, client-side only — the server never holds a decryption key
             </div>
           </div>
           <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
@@ -645,7 +645,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         {children}
 
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-          Zero-Knowledge Note Vault v3.0.0 \u2014 FastAPI + React \u2014 AES-256-GCM, keys never leave the browser
+          Zero-Knowledge Note Vault v3.0.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>

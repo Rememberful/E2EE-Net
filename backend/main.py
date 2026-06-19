@@ -1,30 +1,28 @@
 import os
-import base64
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # ─── Rate Limiter ──────────────────────────────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 # ─── App Bootstrap ─────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="E2EE Cyber Core API",
-    version="2.1.0",
-    description="Hybrid RSA-OAEP + AES-256-GCM end-to-end encryption backend",
+    title="Zero-Knowledge Note Vault API",
+    version="3.0.0",
+    description=(
+        "Blind ciphertext storage. The server never receives, generates, or stores "
+        "a decryption key — all encryption and decryption happens client-side. "
+        "The server cannot read note contents under any circumstance."
+    ),
     docs_url="/docs",
     redoc_url=None,
 )
@@ -44,204 +42,194 @@ app.add_middleware(
     expose_headers=["X-Request-ID"],
 )
 
-# ─── Server Crypto Infrastructure ──────────────────────────────────────────────
+# ─── In-Memory Stores ──────────────────────────────────────────────────────────
 SERVER_START_TIME = time.time()
 
-print("[INIT] Generating RSA-2048 key pair on server boot...")
-_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-_public_pem: str = _private_key.public_key().public_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-).decode("utf-8")
+# Blind vault — server only ever sees ciphertext + IV. Never a key, never plaintext.
+# Each record: { id, ciphertext, iv, mode, expires_at, created_at, viewed }
+vault: dict[str, dict] = {}
 
-KEY_FINGERPRINT = base64.b64encode(
-    _private_key.public_key()
-    .public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    [-32:]
-).decode()
-
-print(f"[INIT] Key fingerprint (last 32B SHA): {KEY_FINGERPRINT}")
-
-# ─── In-Memory Stores ──────────────────────────────────────────────────────────
-# Encrypted vault — never stores plaintext
-secure_vault: list[dict] = []
-
-# Audit log — stores metadata only, no ciphertext bodies
+# Audit log — metadata only (no ciphertext, no keys, no plaintext)
 audit_log: list[dict] = []
 
-MAX_VAULT_SIZE = 500  # Cap memory usage on free Render tier
+MAX_VAULT_SIZE = 1000
+DEFAULT_TTL_SECONDS = 24 * 60 * 60   # 24h default expiry
+MAX_TTL_SECONDS = 7 * 24 * 60 * 60   # 7 days max
+MAX_CIPHERTEXT_B64_LEN = 200_000     # ~150KB plaintext ceiling, generous for notes
 
 
 # ─── Models ────────────────────────────────────────────────────────────────────
-class HybridPayload(BaseModel):
-    encrypted_session_key: str = Field(..., description="RSA-OAEP encrypted AES-256 key, base64")
+class CreateNoteRequest(BaseModel):
+    ciphertext: str = Field(..., description="AES-GCM ciphertext + tag, base64")
     iv: str = Field(..., description="AES-GCM 96-bit IV, base64")
-    ciphertext: str = Field(..., description="AES-256-GCM ciphertext + auth tag, base64")
-    client_id: Optional[str] = Field(None, description="Optional opaque client identifier")
+    mode: str = Field("burn", description="'burn' (delete after first read) or 'expire' (delete after ttl)")
+    ttl_seconds: Optional[int] = Field(None, description="Lifetime in seconds, used when mode='expire'")
+    client_id: Optional[str] = Field(None, description="Opaque client identifier")
 
 
-class AuditEntry(BaseModel):
+class NoteResponse(BaseModel):
     id: str
-    timestamp: str
-    client_id: Optional[str]
-    source_ip: str
-    status: str
-    payload_size_bytes: int
+    ciphertext: str
+    iv: str
+    mode: str
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat(timespec="seconds")
 
 
 def _append_audit(entry: dict):
     audit_log.append(entry)
-    # Keep last 200 entries to avoid unbounded memory growth
     if len(audit_log) > 200:
         audit_log.pop(0)
+
+
+def _purge_expired():
+    now = _utc_now()
+    expired_ids = [
+        nid for nid, rec in vault.items()
+        if rec["mode"] == "expire" and rec["expires_at"] and now > rec["expires_at"]
+    ]
+    for nid in expired_ids:
+        del vault[nid]
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
 
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["ops"])
 def health_check():
-    """Render health-check endpoint. Returns 200 when the service is live."""
+    """Render health-check endpoint."""
     return {
         "status": "online",
         "uptime_seconds": round(time.time() - SERVER_START_TIME),
-        "vault_records": len(secure_vault),
+        "vault_records": len(vault),
         "audit_entries": len(audit_log),
     }
 
 
-@app.get("/api/public-key", tags=["crypto"])
-@limiter.limit("30/minute")
-def get_public_key(request: Request):
+@app.post("/api/notes", tags=["vault"])
+@limiter.limit("20/minute")
+def create_note(payload: CreateNoteRequest, request: Request):
     """
-    Returns the server RSA-2048 public key for client-side hybrid encryption.
-    Also returns a fingerprint so the client can pin the key for the session.
+    Stores an opaque encrypted note. The server never sees the AES key, the IV
+    alone is meaningless, and ciphertext is unreadable without the key — which
+    never leaves the sender's browser except inside the share-link URL fragment
+    (URL fragments are never transmitted to any server by the browser).
     """
+    _purge_expired()
+
+    if payload.mode not in ("burn", "expire"):
+        raise HTTPException(status_code=400, detail="mode must be 'burn' or 'expire'.")
+
+    if len(payload.ciphertext) > MAX_CIPHERTEXT_B64_LEN:
+        raise HTTPException(status_code=413, detail="Note exceeds maximum size.")
+
+    if len(vault) >= MAX_VAULT_SIZE:
+        raise HTTPException(status_code=507, detail="Vault at capacity. Try again later.")
+
+    note_id = uuid.uuid4().hex
+    now = _utc_now()
+
+    expires_at = None
+    if payload.mode == "expire":
+        ttl = payload.ttl_seconds or DEFAULT_TTL_SECONDS
+        ttl = max(60, min(ttl, MAX_TTL_SECONDS))  # clamp 1min .. 7days
+        expires_at = now + timedelta(seconds=ttl)
+
+    vault[note_id] = {
+        "id": note_id,
+        "ciphertext": payload.ciphertext,
+        "iv": payload.iv,
+        "mode": payload.mode,
+        "created_at": now,
+        "expires_at": expires_at,
+        "viewed": False,
+    }
+
+    _append_audit({
+        "id": note_id,
+        "timestamp": _iso(now),
+        "client_id": payload.client_id,
+        "source_ip": _client_ip(request),
+        "action": "CREATE",
+        "mode": payload.mode,
+        "payload_size_bytes": len(payload.ciphertext) + len(payload.iv),
+    })
+
+    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE STORED | mode={payload.mode} | server cannot read contents")
+
     return {
-        "public_key": _public_pem,
-        "algorithm": "RSA-2048 / OAEP-SHA256",
-        "key_fingerprint": KEY_FINGERPRINT,
-        "server_time": _utc_now(),
+        "id": note_id,
+        "mode": payload.mode,
+        "expires_at": _iso(expires_at) if expires_at else None,
+        "created_at": _iso(now),
     }
 
 
-@app.post("/api/send-message", tags=["crypto"])
-@limiter.limit("20/minute")
-def ingest_payload(payload: HybridPayload, request: Request):
+@app.get("/api/notes/{note_id}", response_model=NoteResponse, tags=["vault"])
+@limiter.limit("30/minute")
+def get_note(note_id: str, request: Request):
     """
-    Accepts a hybrid-encrypted payload.
-    1. Decrypts the AES session key with the server RSA private key (OAEP-SHA256).
-    2. Decrypts + authenticates the message body with AES-256-GCM.
-    3. Stores the *encrypted* payload in the vault (zero-knowledge at rest).
-    4. Appends a metadata-only entry to the audit log.
-    Returns a preview of the decrypted plaintext so the client can verify.
+    Returns the raw ciphertext + IV for a note. Decryption happens entirely in
+    the requester's browser using the key from the URL fragment — a value this
+    endpoint never receives and the server never has access to.
     """
-    request_id = str(uuid.uuid4())
-    source_ip = request.client.host if request.client else "unknown"
-    received_at = _utc_now()
+    _purge_expired()
 
-    try:
-        # ── 0. Validate rough payload sizes before decoding ────────────────────
-        payload_json = payload.model_dump()
-        raw_size = sum(len(v) for v in payload_json.values() if isinstance(v, str))
+    rec = vault.get(note_id)
+    now = _utc_now()
 
-        if raw_size > 65_536:  # 64 KB encoded limit
-            raise HTTPException(status_code=413, detail="Payload exceeds maximum size.")
+    if rec is None:
+        _append_audit({
+            "id": note_id, "timestamp": _iso(now), "client_id": None,
+            "source_ip": _client_ip(request), "action": "READ_MISS",
+            "mode": "-", "payload_size_bytes": 0,
+        })
+        raise HTTPException(status_code=404, detail="Note not found, already viewed, or expired.")
 
-        # ── 1. Asymmetric layer: unwrap AES session key ────────────────────────
-        enc_key_bytes = base64.b64decode(payload.encrypted_session_key)
-        session_key = _private_key.decrypt(
-            enc_key_bytes,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None,
-            ),
-        )
+    if rec["mode"] == "expire" and rec["expires_at"] and now > rec["expires_at"]:
+        del vault[note_id]
+        raise HTTPException(status_code=404, detail="Note not found, already viewed, or expired.")
 
-        if len(session_key) != 32:
-            raise ValueError("Session key must be 256-bit.")
+    response = {
+        "id": rec["id"],
+        "ciphertext": rec["ciphertext"],
+        "iv": rec["iv"],
+        "mode": rec["mode"],
+    }
 
-        # ── 2. Symmetric layer: AES-256-GCM decrypt + authenticate ────────────
-        iv_bytes = base64.b64decode(payload.iv)
-        ct_bytes = base64.b64decode(payload.ciphertext)
+    if rec["mode"] == "burn":
+        del vault[note_id]  # one-time read — gone immediately after this response
+        action = "READ_AND_BURN"
+    else:
+        rec["viewed"] = True
+        action = "READ"
 
-        if len(iv_bytes) != 12:
-            raise ValueError("IV must be 96-bit.")
+    _append_audit({
+        "id": note_id, "timestamp": _iso(now), "client_id": None,
+        "source_ip": _client_ip(request), "action": action,
+        "mode": rec["mode"], "payload_size_bytes": len(rec["ciphertext"]),
+    })
 
-        aesgcm = AESGCM(session_key)
-        plaintext_bytes = aesgcm.decrypt(iv_bytes, ct_bytes, None)
-        plaintext = plaintext_bytes.decode("utf-8")
+    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE RETRIEVED | action={action} | server cannot read contents")
 
-        # ── 3. Zero-knowledge vault write (encrypted payload only) ────────────
-        vault_entry = {
-            "id": request_id,
-            "timestamp": received_at,
-            "client_id": payload.client_id,
-            "encrypted_session_key": payload.encrypted_session_key,
-            "iv": payload.iv,
-            "ciphertext": payload.ciphertext,
-        }
-        if len(secure_vault) < MAX_VAULT_SIZE:
-            secure_vault.append(vault_entry)
-
-        # ── 4. Audit log (metadata only, no payload body) ─────────────────────
-        audit_entry = {
-            "id": request_id,
-            "timestamp": received_at,
-            "client_id": payload.client_id,
-            "source_ip": source_ip,
-            "status": "VERIFIED",
-            "payload_size_bytes": raw_size,
-        }
-        _append_audit(audit_entry)
-
-        print(
-            f"[{received_at}] [{request_id[:8]}] INGESTION OK | "
-            f"IP={source_ip} | size={raw_size}B | plaintext={plaintext!r}"
-        )
-
-        return JSONResponse(
-            content={
-                "status": "AUTHENTICATED & VERIFIED",
-                "request_id": request_id,
-                "vault_records_stored": len(secure_vault),
-                "decrypted_preview": plaintext,
-                "received_at": received_at,
-            },
-            headers={"X-Request-ID": request_id},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        # Intentionally generic — prevents oracle/timing-attack leakage
-        _append_audit(
-            {
-                "id": request_id,
-                "timestamp": received_at,
-                "client_id": payload.client_id,
-                "source_ip": source_ip,
-                "status": "FAILED",
-                "payload_size_bytes": 0,
-            }
-        )
-        print(f"[{received_at}] [{request_id[:8]}] INGESTION FAILED | {type(exc).__name__}")
-        raise HTTPException(status_code=400, detail="Cryptographic verification failed.")
+    return response
 
 
 @app.get("/api/audit-log", tags=["ops"])
 @limiter.limit("10/minute")
 def get_audit_log(request: Request, limit: int = 20):
-    """
-    Returns the last N audit entries (metadata only — no ciphertext, no plaintext).
-    Useful for monitoring transmission history in the UI.
-    """
+    """Last N audit entries — metadata only, never ciphertext or keys."""
     if limit < 1 or limit > 100:
-        raise HTTPException(status_code=400, detail="limit must be 1–100.")
+        raise HTTPException(status_code=400, detail="limit must be 1-100.")
     return {
         "entries": list(reversed(audit_log[-limit:])),
         "total": len(audit_log),
@@ -250,13 +238,15 @@ def get_audit_log(request: Request, limit: int = 20):
 
 @app.get("/api/server-info", tags=["ops"])
 def server_info():
-    """Returns non-sensitive server metadata for the UI dashboard."""
+    """Non-sensitive runtime metadata for the UI dashboard."""
+    _purge_expired()
     return {
-        "version": "2.1.0",
-        "key_algorithm": "RSA-2048-OAEP-SHA256 + AES-256-GCM",
-        "key_fingerprint": KEY_FINGERPRINT,
+        "version": "3.0.0",
+        "architecture": "Zero-Knowledge Blind Vault (AES-256-GCM, client-side keys only)",
         "vault_capacity": MAX_VAULT_SIZE,
-        "vault_used": len(secure_vault),
+        "vault_used": len(vault),
         "uptime_seconds": round(time.time() - SERVER_START_TIME),
         "environment": os.getenv("ENVIRONMENT", "development"),
+        "default_ttl_seconds": DEFAULT_TTL_SECONDS,
+        "max_ttl_seconds": MAX_TTL_SECONDS,
     }

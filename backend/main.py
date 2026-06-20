@@ -17,13 +17,18 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 # ─── App Bootstrap ─────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Zero-Knowledge Note Vault API",
-    version="3.1.0",
+    version="3.2.0",
     description=(
         "Blind ciphertext storage. The server never receives, generates, or stores "
         "a decryption key — all encryption and decryption happens client-side. "
         "The server cannot read note contents under any circumstance. Reads are "
         "split into a non-destructive 'status' peek (safe for bots/link previews) "
-        "and a destructive 'reveal' (POST, fired only on deliberate user click)."
+        "and a destructive 'reveal' (POST, fired only on deliberate user click). "
+        "Notes may optionally require a sender-chosen passphrase as a second "
+        "factor: the server only ever sees a boolean 'has_passphrase' flag, never "
+        "the passphrase or the PBKDF2-derived key, and has no way to verify a "
+        "guess — correctness is proven solely by AES-GCM tag validation in the "
+        "recipient's own browser."
     ),
     docs_url="/docs",
     redoc_url=None,
@@ -66,6 +71,16 @@ class CreateNoteRequest(BaseModel):
     iv: str = Field(..., description="AES-GCM 96-bit IV, base64")
     mode: str = Field("burn", description="'burn' (delete after first read) or 'expire' (delete after ttl)")
     ttl_seconds: Optional[int] = Field(None, description="Lifetime in seconds, used when mode='expire'")
+    has_passphrase: bool = Field(
+        False,
+        description=(
+            "True if the sender added a passphrase second factor. The server never "
+            "receives the passphrase itself or the derived key — only this boolean, "
+            "so the frontend knows to prompt the recipient before requesting a reveal. "
+            "The server has no way to verify a passphrase guess; correctness is proven "
+            "only by the AES-GCM authentication tag succeeding in the recipient's browser."
+        ),
+    )
     client_id: Optional[str] = Field(None, description="Opaque client identifier")
 
 
@@ -151,6 +166,7 @@ def create_note(payload: CreateNoteRequest, request: Request):
         "ciphertext": payload.ciphertext,
         "iv": payload.iv,
         "mode": payload.mode,
+        "has_passphrase": payload.has_passphrase,
         "created_at": now,
         "expires_at": expires_at,
         "viewed": False,
@@ -162,11 +178,11 @@ def create_note(payload: CreateNoteRequest, request: Request):
         "client_id": payload.client_id,
         "source_ip": _client_ip(request),
         "action": "CREATE",
-        "mode": payload.mode,
+        "mode": payload.mode + ("+passphrase" if payload.has_passphrase else ""),
         "payload_size_bytes": len(payload.ciphertext) + len(payload.iv),
     })
 
-    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE STORED | mode={payload.mode} | server cannot read contents")
+    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE STORED | mode={payload.mode} | passphrase={payload.has_passphrase} | server cannot read contents")
 
     return {
         "id": note_id,
@@ -194,6 +210,7 @@ def peek_note(note_id: str, request: Request):
     return {
         "id": rec["id"],
         "mode": rec["mode"],
+        "has_passphrase": rec.get("has_passphrase", False),
         "exists": True,
     }
 
@@ -268,7 +285,7 @@ def server_info():
     """Non-sensitive runtime metadata for the UI dashboard."""
     _purge_expired()
     return {
-        "version": "3.1.0",
+        "version": "3.2.0",
         "architecture": "Zero-Knowledge Blind Vault (AES-256-GCM, client-side keys only)",
         "vault_capacity": MAX_VAULT_SIZE,
         "vault_used": len(vault),

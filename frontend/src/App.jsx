@@ -19,6 +19,35 @@ async function importKeyRaw(b64url) {
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt']);
 }
 
+// ─── Passphrase key stretching (PBKDF2-HMAC-SHA256, second factor) ───────────
+// The URL fragment token doubles as a per-note salt — it's already unique and
+// high-entropy per note, so it prevents rainbow-table reuse across notes
+// without needing a second random value. The passphrase itself never leaves
+// this function's scope and is never sent anywhere.
+const PBKDF2_ITERATIONS = 100_000;
+
+async function deriveKeyFromPassphrase(passphrase, urlToken, usage) {
+  const encoder = new TextEncoder();
+
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(passphrase),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey'],
+  );
+
+  const salt = encoder.encode(urlToken);
+
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false, // non-extractable — the derived key bytes can never be read back out of the browser, only used
+    usage === 'encrypt' ? ['encrypt'] : ['decrypt'],
+  );
+}
+
 async function encryptText(key, plaintext) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
@@ -205,6 +234,8 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [mode, setMode] = useState('burn');           // 'burn' | 'expire'
   const [ttlHours, setTtlHours] = useState(24);
+  const [usePassphrase, setUsePassphrase] = useState(false);
+  const [passphrase, setPassphrase] = useState('');
   const [clientId] = useState(() => 'cli_' + Math.random().toString(36).slice(2, 10));
 
   const [creating, setCreating] = useState(false);
@@ -218,11 +249,14 @@ export default function App() {
 
   // Read pane
   // idle -> checking -> gated (waiting for click) -> revealing -> ready/burned
+  //                  \-> passphrase_required -> revealing -> ready/burned
   //                  \-> error
   const [readState, setReadState] = useState('idle');
   const [readError, setReadError] = useState(null);
   const [decrypted, setDecrypted] = useState(null);
-  const [noteMeta, setNoteMeta] = useState(null); // { mode } from the safe /status peek
+  const [noteMeta, setNoteMeta] = useState(null); // { mode, hasPassphrase } from the safe /status peek
+  const [readPassphrase, setReadPassphrase] = useState('');
+  const [passphraseAttemptFailed, setPassphraseAttemptFailed] = useState(false);
 
   // System log
   const [termLines, setTermLines] = useState([
@@ -269,26 +303,47 @@ export default function App() {
   // ── Create note flow ───────────────────────────────────────────────────
   const handleCreate = async () => {
     if (!message.trim()) return;
+    if (usePassphrase && passphrase.length < 8) {
+      setCreateError('Passphrase must be at least 8 characters.');
+      return;
+    }
+
     setCreating(true);
     setCreateError(null);
     setShareLink(null);
     setLinkCopied(false);
 
     try {
-      log('Generating ephemeral AES-256 key in-browser...', 'dim');
-      const key = await generateKey();
+      let key, rawToken;
+
+      if (usePassphrase) {
+        // The fragment token is random, high-entropy, and unique per note —
+        // it serves as the PBKDF2 salt. It is NOT the key itself; without the
+        // passphrase, the salt alone derives nothing useful.
+        const tokenBytes = crypto.getRandomValues(new Uint8Array(18));
+        rawToken = bufToBase64Url(tokenBytes.buffer);
+        log('Deriving AES-256 key from passphrase via PBKDF2-HMAC-SHA256 (100,000 iterations)...', 'dim');
+        key = await deriveKeyFromPassphrase(passphrase, rawToken, 'encrypt');
+        log('Key derived locally and held non-extractable — passphrase discarded from memory.', 'accent');
+      } else {
+        log('Generating ephemeral AES-256 key in-browser...', 'dim');
+        key = await generateKey();
+        rawToken = await exportKeyRaw(key);
+      }
 
       log('Encrypting note locally (AES-256-GCM)...', 'dim');
       const { ciphertext, iv } = await encryptText(key, message);
 
-      const rawKey = await exportKeyRaw(key);
-      log('Key exported to memory only — will be embedded in URL fragment, never sent to server.', 'accent');
+      if (!usePassphrase) {
+        log('Key exported to memory only — will be embedded in URL fragment, never sent to server.', 'accent');
+      }
 
       const body = {
         ciphertext,
         iv,
         mode,
         ttl_seconds: mode === 'expire' ? ttlHours * 3600 : null,
+        has_passphrase: usePassphrase,
         client_id: clientId,
       };
 
@@ -305,13 +360,17 @@ export default function App() {
       }
 
       const result = await res.json();
-      const link = `${window.location.origin}/view/${result.id}#${rawKey}`;
-      setShareLink({ url: link, mode: result.mode, expiresAt: result.expires_at });
+      const link = `${window.location.origin}/view/${result.id}#${rawToken}`;
+      setShareLink({ url: link, mode: result.mode, expiresAt: result.expires_at, hasPassphrase: usePassphrase });
 
       log(`Note stored as ciphertext. id=${result.id.slice(0, 10)}… mode=${result.mode}`, 'success');
       log('Server received zero key material. It cannot decrypt this note.', 'success');
+      if (usePassphrase) {
+        log('Server also never received the passphrase — share it with the recipient through a different channel.', 'accent');
+      }
 
       setMessage('');
+      setPassphrase('');
       await fetchAuditLog();
     } catch (err) {
       setCreateError(err.message || 'Encryption or transmission failed.');
@@ -360,8 +419,11 @@ export default function App() {
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        setNoteMeta({ mode: data.mode });
-        setReadState('gated'); // waiting for the user to deliberately click reveal
+        setNoteMeta({ mode: data.mode, hasPassphrase: !!data.has_passphrase });
+        // Notes with a passphrase go straight to the passphrase challenge —
+        // entering the correct passphrase IS the deliberate reveal action,
+        // so no separate "click to reveal" button is needed for those.
+        setReadState(data.has_passphrase ? 'passphrase_required' : 'gated');
       } catch (err) {
         setReadState('error');
         setReadError('Could not reach the vault to check this note.');
@@ -369,13 +431,15 @@ export default function App() {
     })();
   }, [route]);
 
-  // ── Deliberate user click: DESTRUCTIVE reveal ──────────────────────────
-  // Only this function calls POST /reveal. It never runs on page load, only
-  // in direct response to the button's onClick — so an automated fetch can
-  // never trigger it, even by accident.
+  // ── Deliberate user action: DESTRUCTIVE reveal ─────────────────────────
+  // Only this function calls POST /reveal. It never runs on page load — only
+  // from the "Click to reveal" button or the passphrase form's submit, both
+  // of which require a deliberate user action. An automated fetch can never
+  // trigger it.
   const handleReveal = async () => {
     setReadState('revealing');
     setReadError(null);
+    setPassphraseAttemptFailed(false);
 
     try {
       const res = await fetch(`${API_BASE}/api/notes/${route.noteId}/reveal`, { method: 'POST' });
@@ -390,14 +454,36 @@ export default function App() {
       }
 
       const data = await res.json();
-      const key = await importKeyRaw(route.key);
+
+      let key;
+      if (noteMeta?.hasPassphrase) {
+        key = await deriveKeyFromPassphrase(readPassphrase, route.key, 'decrypt');
+      } else {
+        key = await importKeyRaw(route.key);
+      }
+
+      // A wrong passphrase produces a different derived key, which makes the
+      // GCM authentication tag check fail — this throw is how an incorrect
+      // guess is detected. There is no separate "is this correct" call to
+      // the server; the server cannot know either way.
       const plaintext = await decryptText(key, data.ciphertext, data.iv);
 
       setDecrypted({ text: plaintext, mode: data.mode });
       setReadState(data.mode === 'burn' ? 'burned' : 'ready');
     } catch (err) {
-      setReadState('error');
-      setReadError('Decryption failed. The key may be incorrect or the ciphertext corrupted.');
+      if (noteMeta?.hasPassphrase) {
+        // The note is already consumed server-side at this point if it was
+        // burn mode — a wrong passphrase on a burn note means the plaintext
+        // is now permanently unrecoverable. This is the same trade-off
+        // Privnote-style tools make: the link should only be opened by the
+        // intended recipient who knows the passphrase.
+        setPassphraseAttemptFailed(true);
+        setReadState('passphrase_required');
+        setReadPassphrase('');
+      } else {
+        setReadState('error');
+        setReadError('Decryption failed. The key may be incorrect or the ciphertext corrupted.');
+      }
     }
   };
 
@@ -417,6 +503,70 @@ export default function App() {
 
             {readState === 'error' && (
               <div style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>{readError}</div>
+            )}
+
+            {readState === 'passphrase_required' && (
+              <div>
+                <div style={{ marginBottom: '16px' }}>
+                  <Badge tone={noteMeta?.mode === 'burn' ? 'warning' : 'accent'}>
+                    {noteMeta?.mode === 'burn' ? 'Passphrase required \u2014 burns after this attempt' : 'Passphrase required'}
+                  </Badge>
+                </div>
+
+                {passphraseAttemptFailed && (
+                  <div style={{
+                    marginBottom: '14px', padding: '10px 13px', background: 'var(--danger)15',
+                    border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)',
+                    fontSize: '12.5px', color: 'var(--danger)', lineHeight: 1.55,
+                  }}>
+                    {noteMeta?.mode === 'burn'
+                      ? 'That passphrase was incorrect, and this note was burn-after-read \u2014 it has now been permanently consumed and cannot be recovered.'
+                      : 'That passphrase was incorrect. You can try again before this note expires.'}
+                  </div>
+                )}
+
+                <form
+                  onSubmit={e => { e.preventDefault(); if (readPassphrase) handleReveal(); }}
+                  style={{
+                    background: 'var(--bg-input)', border: '1px dashed var(--border-base)',
+                    borderRadius: 'var(--radius-sm)', padding: '24px 18px', marginBottom: '14px',
+                  }}
+                >
+                  <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: 1.6 }}>
+                    {noteMeta?.mode === 'burn' && !passphraseAttemptFailed
+                      ? 'This note requires a passphrase and will burn after this single attempt, whether it succeeds or not. Make sure you have the correct passphrase before submitting.'
+                      : 'Enter the passphrase the sender shared with you separately.'}
+                  </div>
+                  <input
+                    type="password"
+                    value={readPassphrase}
+                    onChange={e => setReadPassphrase(e.target.value)}
+                    placeholder="Passphrase"
+                    autoFocus
+                    style={{
+                      width: '100%', background: 'var(--bg-root)', color: 'var(--text-primary)',
+                      border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                      padding: '10px 13px', fontSize: '13px', fontFamily: 'inherit', marginBottom: '14px',
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!readPassphrase}
+                    style={{
+                      padding: '10px 24px', background: readPassphrase ? 'var(--accent)' : 'var(--border-base)',
+                      color: '#1a1418', border: 'none', borderRadius: 'var(--radius-sm)',
+                      fontFamily: 'inherit', fontWeight: 600, fontSize: '13px',
+                      opacity: readPassphrase ? 1 : 0.55, width: '100%',
+                    }}
+                  >
+                    Submit & reveal
+                  </button>
+                </form>
+
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  The passphrase is checked entirely in your browser. The server never sees it and cannot verify it.
+                </div>
+              </div>
             )}
 
             {readState === 'gated' && (
@@ -454,7 +604,9 @@ export default function App() {
             )}
 
             {readState === 'revealing' && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Decrypting in your browser…</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                {noteMeta?.hasPassphrase ? 'Deriving key and decrypting in your browser\u2026' : 'Decrypting in your browser\u2026'}
+              </div>
             )}
 
             {(readState === 'ready' || readState === 'burned') && decrypted && (
@@ -484,7 +636,7 @@ export default function App() {
   }
 
   // ── Render: CREATE VIEW ────────────────────────────────────────────────
-  const canSend = !!message.trim() && !creating;
+  const canSend = !!message.trim() && !creating && (!usePassphrase || passphrase.length >= 8);
   const uptimeStr = serverInfo ? `${Math.floor(serverInfo.uptime_seconds / 60)}m ${serverInfo.uptime_seconds % 60}s` : '—';
 
   return (
@@ -533,7 +685,34 @@ export default function App() {
                   <option value={168}>7 days</option>
                 </select>
               )}
+
+              <ModeButton active={usePassphrase} onClick={() => setUsePassphrase(v => !v)}>
+                {usePassphrase ? 'Passphrase: on' : 'Add passphrase'}
+              </ModeButton>
             </div>
+
+            {usePassphrase && (
+              <div style={{ marginTop: '12px' }}>
+                <input
+                  type="password"
+                  value={passphrase}
+                  onChange={e => setPassphrase(e.target.value)}
+                  placeholder="Shared secret (min 8 characters) — share this separately from the link"
+                  style={{
+                    width: '100%', background: 'var(--bg-input)', color: 'var(--text-primary)',
+                    border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                    padding: '9px 12px', fontSize: '13px', fontFamily: 'inherit',
+                    transition: 'border-color var(--transition)',
+                  }}
+                  onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                  onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
+                />
+                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.6 }}>
+                  This passphrase is never sent to the server. Send it to the recipient through a
+                  different channel than the link itself — a text message, a call, in person.
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', gap: '10px' }}>
               <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
@@ -587,7 +766,15 @@ export default function App() {
                 <Badge tone={shareLink.mode === 'burn' ? 'warning' : 'accent'}>
                   {shareLink.mode === 'burn' ? 'Burns after first read' : `Expires ${shareLink.expiresAt?.slice(0, 16)} UTC`}
                 </Badge>
+                {shareLink.hasPassphrase && (
+                  <Badge tone="accent">Passphrase required</Badge>
+                )}
               </div>
+              {shareLink.hasPassphrase && (
+                <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  Remember to share the passphrase with your recipient separately — it is not in this link.
+                </div>
+              )}
             </Card>
           )}
 
@@ -656,6 +843,10 @@ export default function App() {
                 <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Burn after read</div>
                 One-time notes are deleted the instant they're served — even the server operator cannot re-read them.
               </div>
+              <div>
+                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Optional passphrase, PBKDF2-stretched</div>
+                A second factor the server never sees: 100,000 PBKDF2 iterations derive the AES key from a passphrase known only to sender and recipient.
+              </div>
             </div>
           </Card>
         </div>
@@ -717,7 +908,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         {children}
 
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-          Zero-Knowledge Note Vault v3.1.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
+          Zero-Knowledge Note Vault v3.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>

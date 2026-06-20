@@ -4,3 +4,4 @@ cryptography>=42.0.5
 pydantic>=2.7.0
 slowapi>=0.1.9
 python-dotenv>=1.0.1
+redis>=5.0.0

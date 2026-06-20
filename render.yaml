@@ -1,4 +1,10 @@
 services:
+  - type: keyvalue
+    name: e2ee-note-vault-store
+    plan: free
+    maxmemoryPolicy: noeviction   # we manage expiry ourselves via SETEX TTLs; don't let Redis evict early under memory pressure
+    ipAllowList: []                # internal connections only — never expose this to the public internet
+
   - type: web
     name: e2ee-cyber-backend
     runtime: python
@@ -11,6 +17,11 @@ services:
       - key: ALLOWED_ORIGINS
         # Replace with your actual Render frontend URL
         value: https://e2ee-net.onrender.com
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: e2ee-note-vault-store
+          property: connectionString
     healthCheckPath: /health
     autoDeploy: true
 

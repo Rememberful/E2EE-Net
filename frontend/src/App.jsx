@@ -65,6 +65,49 @@ async function decryptText(key, ciphertextB64, ivB64) {
   return new TextDecoder().decode(ptBuf);
 }
 
+// ─── Sender-side delivery tracking ─────────────────────────────────────────────
+// The tracking token is generated entirely client-side and only its SHA-256
+// hash is ever sent to the server. The server stores that hash as a lookup
+// key but never learns the raw token — only whoever holds the raw token
+// (kept in this browser's localStorage) can later query status. The hash has
+// no mathematical relationship to the AES decryption key, which lives
+// separately in the URL fragment and never reaches the server in any form.
+function generateTrackingToken() {
+  const bytes = crypto.getRandomValues(new Uint8Array(18));
+  return bufToBase64Url(bytes.buffer);
+}
+
+async function sha256Hex(input) {
+  const encoded = new TextEncoder().encode(input);
+  const hashBuf = await crypto.subtle.digest('SHA-256', encoded);
+  const bytes = new Uint8Array(hashBuf);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+const TRACKED_NOTES_STORAGE_KEY = 'zk-vault-tracked-notes';
+const MIN_VIEW_DURATION = 5;
+const MAX_VIEW_DURATION = 600;
+
+function loadTrackedNotes() {
+  try {
+    const raw = window.localStorage?.getItem?.(TRACKED_NOTES_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTrackedNote(entry) {
+  try {
+    const existing = loadTrackedNotes();
+    const updated = [entry, ...existing].slice(0, 50); // cap local history
+    window.localStorage?.setItem?.(TRACKED_NOTES_STORAGE_KEY, JSON.stringify(updated));
+  } catch {
+    // localStorage unavailable (private browsing, etc.) — tracking still
+    // works for the current session via React state, just won't persist.
+  }
+}
+
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
   let bin = '';
@@ -236,12 +279,24 @@ export default function App() {
   const [ttlHours, setTtlHours] = useState(24);
   const [usePassphrase, setUsePassphrase] = useState(false);
   const [passphrase, setPassphrase] = useState('');
+  const [enableTracking, setEnableTracking] = useState(true);
+  const [trackingTitle, setTrackingTitle] = useState('');
+  const [viewDurationEnabled, setViewDurationEnabled] = useState(false);
+  const [viewDurationSeconds, setViewDurationSeconds] = useState(30);
   const [clientId] = useState(() => 'cli_' + Math.random().toString(36).slice(2, 10));
 
   const [creating, setCreating] = useState(false);
   const [shareLink, setShareLink] = useState(null);
   const [createError, setCreateError] = useState(null);
   const [linkCopied, setLinkCopied] = useState(false);
+
+  // Sender-side delivery tracking dashboard
+  const [trackedNotes, setTrackedNotes] = useState(() => loadTrackedNotes());
+  const [trackingStatuses, setTrackingStatuses] = useState({}); // noteId -> { status, viewedAt, title, expiresAt, mode }
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [managingNoteId, setManagingNoteId] = useState(null); // which entry has an action in flight
+  const [extendInputFor, setExtendInputFor] = useState(null); // noteId currently showing the extend-by input
+  const [extendHours, setExtendHours] = useState(1);
 
   // Audit log
   const [auditLog, setAuditLog] = useState([]);
@@ -254,9 +309,14 @@ export default function App() {
   const [readState, setReadState] = useState('idle');
   const [readError, setReadError] = useState(null);
   const [decrypted, setDecrypted] = useState(null);
-  const [noteMeta, setNoteMeta] = useState(null); // { mode, hasPassphrase } from the safe /status peek
+  const [noteMeta, setNoteMeta] = useState(null); // { mode, hasPassphrase, frozen } from the safe /status peek
   const [readPassphrase, setReadPassphrase] = useState('');
   const [passphraseAttemptFailed, setPassphraseAttemptFailed] = useState(false);
+
+  // Grace-period session (burn-mode only) + recipient-side view-duration auto-clear
+  const [sessionToken, setSessionToken] = useState(null);
+  const [viewSecondsLeft, setViewSecondsLeft] = useState(null);
+  const [autoCleared, setAutoCleared] = useState(false);
 
   // System log
   const [termLines, setTermLines] = useState([
@@ -300,6 +360,120 @@ export default function App() {
     }
   }, [log]);
 
+  // ── Sender delivery tracking ───────────────────────────────────────────
+  // Queries status for every locally-saved tracked note. Each query sends
+  // only the raw tracking token over HTTPS to be hashed server-side for
+  // lookup — the server never learns it ahead of time and has no way to
+  // enumerate trackers on its own; only someone holding a specific raw
+  // token (kept in this browser's localStorage) can check that note.
+  const checkAllTrackingStatuses = useCallback(async () => {
+    if (trackedNotes.length === 0) return;
+    setTrackingLoading(true);
+    try {
+      const results = await Promise.all(
+        trackedNotes.map(async entry => {
+          try {
+            const res = await fetch(`${API_BASE}/api/notes/track/${entry.trackingToken}`);
+            if (!res.ok) return [entry.noteId, { status: 'unknown' }];
+            const data = await res.json();
+            return [entry.noteId, {
+              status: data.status, viewedAt: data.viewed_at,
+              title: data.title, expiresAt: data.expires_at, mode: data.mode,
+            }];
+          } catch {
+            return [entry.noteId, { status: 'unknown' }];
+          }
+        })
+      );
+      setTrackingStatuses(Object.fromEntries(results));
+    } finally {
+      setTrackingLoading(false);
+    }
+  }, [trackedNotes]);
+
+  useEffect(() => {
+    if (trackedNotes.length > 0) checkAllTrackingStatuses();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only on initial mount — manual refresh button covers the rest
+
+  // ── Sender-side management actions: destroy / freeze / extend ─────────
+  // All three are authenticated purely by possession of the raw tracking
+  // token stored in this browser's localStorage — there is no account or
+  // login, so that token is the only proof of "I created this note."
+  const handleDestroy = async (entry) => {
+    if (!window.confirm(`Permanently destroy this note${entry.title ? ` ("${entry.title}")` : ''}? This cannot be undone.`)) return;
+    setManagingNoteId(entry.noteId);
+    try {
+      const res = await fetch(`${API_BASE}/api/notes/${entry.noteId}/destroy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracking_token: entry.trackingToken }),
+      });
+      if (res.ok) {
+        setTrackingStatuses(prev => ({ ...prev, [entry.noteId]: { ...prev[entry.noteId], status: 'destroyed' } }));
+        log(`Note ${entry.noteId.slice(0, 10)}… destroyed by sender.`, 'warning');
+      } else {
+        log('Failed to destroy note — it may already be gone.', 'danger');
+      }
+    } catch {
+      log('Network error while destroying note.', 'danger');
+    } finally {
+      setManagingNoteId(null);
+    }
+  };
+
+  const handleToggleFreeze = async (entry) => {
+    setManagingNoteId(entry.noteId);
+    try {
+      const res = await fetch(`${API_BASE}/api/notes/${entry.noteId}/freeze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracking_token: entry.trackingToken }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTrackingStatuses(prev => ({ ...prev, [entry.noteId]: { ...prev[entry.noteId], status: data.status } }));
+        log(`Note ${entry.noteId.slice(0, 10)}… ${data.status === 'frozen' ? 'frozen' : 'unfrozen'}.`, 'accent');
+      } else {
+        log('Failed to update freeze state.', 'danger');
+      }
+    } catch {
+      log('Network error while toggling freeze.', 'danger');
+    } finally {
+      setManagingNoteId(null);
+    }
+  };
+
+  const handleExtend = async (entry) => {
+    setManagingNoteId(entry.noteId);
+    try {
+      const res = await fetch(`${API_BASE}/api/notes/${entry.noteId}/extend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracking_token: entry.trackingToken, additional_seconds: extendHours * 3600 }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTrackingStatuses(prev => ({ ...prev, [entry.noteId]: { ...prev[entry.noteId], expiresAt: data.new_expires_at } }));
+        log(`Note ${entry.noteId.slice(0, 10)}… extended by ${extendHours}h.`, 'accent');
+        setExtendInputFor(null);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        log(`Failed to extend: ${err.detail || 'unknown error'}`, 'danger');
+      }
+    } catch {
+      log('Network error while extending note.', 'danger');
+    } finally {
+      setManagingNoteId(null);
+    }
+  };
+
+  const removeTrackedEntry = (noteId) => {
+    const updated = trackedNotes.filter(e => e.noteId !== noteId);
+    setTrackedNotes(updated);
+    try { window.localStorage?.setItem?.(TRACKED_NOTES_STORAGE_KEY, JSON.stringify(updated)); } catch { /* ignore */ }
+  };
+
   // ── Create note flow ───────────────────────────────────────────────────
   const handleCreate = async () => {
     if (!message.trim()) return;
@@ -338,6 +512,14 @@ export default function App() {
         log('Key exported to memory only — will be embedded in URL fragment, never sent to server.', 'accent');
       }
 
+      let rawTrackingToken = null;
+      let hashedTrackingToken = null;
+      if (enableTracking) {
+        rawTrackingToken = generateTrackingToken();
+        hashedTrackingToken = await sha256Hex(rawTrackingToken);
+        log('Generated a delivery-tracking token locally — only its SHA-256 hash is sent to the server.', 'dim');
+      }
+
       const body = {
         ciphertext,
         iv,
@@ -345,6 +527,9 @@ export default function App() {
         ttl_seconds: mode === 'expire' ? ttlHours * 3600 : null,
         has_passphrase: usePassphrase,
         client_id: clientId,
+        hashed_tracking_token: hashedTrackingToken,
+        tracking_title: enableTracking && trackingTitle.trim() ? trackingTitle.trim().slice(0, 80) : null,
+        view_duration_seconds: viewDurationEnabled ? viewDurationSeconds : null,
       };
 
       log('Transmitting ciphertext to vault (key withheld)...', 'dim');
@@ -361,7 +546,10 @@ export default function App() {
 
       const result = await res.json();
       const link = `${window.location.origin}/view/${result.id}#${rawToken}`;
-      setShareLink({ url: link, mode: result.mode, expiresAt: result.expires_at, hasPassphrase: usePassphrase });
+      setShareLink({
+        url: link, mode: result.mode, expiresAt: result.expires_at,
+        hasPassphrase: usePassphrase, trackingToken: rawTrackingToken,
+      });
 
       log(`Note stored as ciphertext. id=${result.id.slice(0, 10)}… mode=${result.mode}`, 'success');
       log('Server received zero key material. It cannot decrypt this note.', 'success');
@@ -369,8 +557,31 @@ export default function App() {
         log('Server also never received the passphrase — share it with the recipient through a different channel.', 'accent');
       }
 
+      if (rawTrackingToken) {
+        // Only the sender-typed title is kept locally — never the note's
+        // own content, even truncated. The title has no relationship to
+        // what the note says; it exists purely so the sender can tell
+        // tracked entries apart in their own dashboard.
+        const entry = {
+          noteId: result.id,
+          trackingToken: rawTrackingToken,
+          mode: result.mode,
+          createdAt: result.created_at,
+          title: body.tracking_title || null,
+        };
+        saveTrackedNote(entry);
+        setTrackedNotes(prev => [entry, ...prev].slice(0, 50));
+        // We know it's freshly created and unread — show that immediately
+        // rather than waiting on a round-trip to /track for the first paint.
+        setTrackingStatuses(prev => ({
+          ...prev,
+          [result.id]: { status: 'active', viewedAt: null, title: entry.title, expiresAt: result.expires_at, mode: result.mode },
+        }));
+      }
+
       setMessage('');
       setPassphrase('');
+      setTrackingTitle('');
       await fetchAuditLog();
     } catch (err) {
       setCreateError(err.message || 'Encryption or transmission failed.');
@@ -391,10 +602,18 @@ export default function App() {
     }
   };
 
-  // ── On load (route.view === 'read'): SAFE peek only ────────────────────
-  // This calls /status, which never burns the note and never returns
-  // ciphertext. Safe for link-preview bots (WhatsApp, Telegram, Slack, etc.)
-  // to hit automatically — it cannot consume a one-time read.
+  // ── On load (route.view === 'read'): recover an in-flight grace-period
+  // session first, falling back to a fresh SAFE peek only if none exists.
+  //
+  // Why this matters: if Reveal was already clicked in this tab and the
+  // connection dropped, the tab crashed, or the page was refreshed before
+  // decryption finished rendering, a naive reload would just re-run /status
+  // — which now 404s, because the note's own key was deleted the moment
+  // Reveal succeeded. Without recovery, that's a permanent, silent loss of
+  // the secret purely from a network blip, which is the exact failure mode
+  // self-destructing-note tools are notorious for. sessionStorage (not
+  // localStorage) is used deliberately: recovery should only apply to the
+  // same tab/window that initiated the reveal, not leak across tabs.
   useEffect(() => {
     if (route.view !== 'read') return;
     (async () => {
@@ -405,6 +624,37 @@ export default function App() {
         setReadState('error');
         setReadError('No decryption key present in the link. The key lives after the # and never reaches the server.');
         return;
+      }
+
+      const recoveryKey = `zk-vault-session-${route.noteId}`;
+      let recoveredSessionToken = null;
+      try {
+        recoveredSessionToken = window.sessionStorage?.getItem?.(recoveryKey);
+      } catch { /* sessionStorage unavailable — proceed without recovery */ }
+
+      if (recoveredSessionToken) {
+        try {
+          const res = await fetch(`${API_BASE}/api/notes/${route.noteId}/session/${recoveredSessionToken}`);
+          if (res.ok) {
+            const data = await res.json();
+            log('Recovered an in-progress reveal after a refresh or dropped connection.', 'accent');
+            const key = await importKeyRaw(route.key);
+            const plaintext = await decryptText(key, data.ciphertext, data.iv);
+            setDecrypted({ text: plaintext, mode: data.mode });
+            setSessionToken(recoveredSessionToken);
+            try { window.sessionStorage?.removeItem?.(recoveryKey); } catch { /* ignore */ }
+            fetch(`${API_BASE}/api/notes/${route.noteId}/confirm-consumed?session_token=${encodeURIComponent(recoveredSessionToken)}`, { method: 'POST' })
+              .catch(() => { /* best-effort */ });
+            setReadState('burned');
+            return;
+          }
+          // Session expired or already confirmed — the grace period ran out
+          // or this same reveal already completed elsewhere. Fall through to
+          // a normal peek, which will correctly report the note as gone.
+          try { window.sessionStorage?.removeItem?.(recoveryKey); } catch { /* ignore */ }
+        } catch {
+          // Recovery attempt failed — fall through to a normal peek below.
+        }
       }
 
       try {
@@ -419,7 +669,12 @@ export default function App() {
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        setNoteMeta({ mode: data.mode, hasPassphrase: !!data.has_passphrase });
+        if (data.frozen) {
+          setReadState('frozen');
+          setNoteMeta({ mode: data.mode, hasPassphrase: !!data.has_passphrase, frozen: true });
+          return;
+        }
+        setNoteMeta({ mode: data.mode, hasPassphrase: !!data.has_passphrase, frozen: false });
         // Notes with a passphrase go straight to the passphrase challenge —
         // entering the correct passphrase IS the deliberate reveal action,
         // so no separate "click to reveal" button is needed for those.
@@ -448,12 +703,29 @@ export default function App() {
         setReadError('This note was not found. It may have already been viewed (burn-after-read) or has expired.');
         return;
       }
+      if (res.status === 423) {
+        // Frozen between the initial peek and this click — a real but rare
+        // race. Treated the same as the dedicated frozen state.
+        setReadState('frozen');
+        return;
+      }
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
 
       const data = await res.json();
+
+      // Persist the session token immediately, before attempting decryption —
+      // this is the actual window the grace period protects: a crash, tab
+      // close, or refresh between the server confirming the reveal and this
+      // tab finishing local decryption. sessionStorage is tab-scoped on
+      // purpose, since recovery should only apply to the same tab/window
+      // that initiated the reveal.
+      const recoveryKey = `zk-vault-session-${route.noteId}`;
+      if (data.session_token) {
+        try { window.sessionStorage?.setItem?.(recoveryKey, data.session_token); } catch { /* ignore */ }
+      }
 
       let key;
       if (noteMeta?.hasPassphrase) {
@@ -469,6 +741,22 @@ export default function App() {
       const plaintext = await decryptText(key, data.ciphertext, data.iv);
 
       setDecrypted({ text: plaintext, mode: data.mode });
+      setSessionToken(data.session_token || null);
+
+      if (data.mode === 'burn' && data.session_token) {
+        // Decryption succeeded in this tab, so there's nothing left to
+        // recover from — confirm consumption now, which both clears the
+        // recovery entry and flips the sender's tracker from "consuming"
+        // to "viewed."
+        try { window.sessionStorage?.removeItem?.(recoveryKey); } catch { /* ignore */ }
+        fetch(`${API_BASE}/api/notes/${route.noteId}/confirm-consumed?session_token=${encodeURIComponent(data.session_token)}`, { method: 'POST' })
+          .catch(() => { /* best-effort — the session's own TTL is the fallback cleanup */ });
+      }
+
+      if (data.view_duration_seconds) {
+        setViewSecondsLeft(data.view_duration_seconds);
+      }
+
       setReadState(data.mode === 'burn' ? 'burned' : 'ready');
     } catch (err) {
       if (noteMeta?.hasPassphrase) {
@@ -487,6 +775,23 @@ export default function App() {
     }
   };
 
+  // ── Recipient-side view-duration auto-clear ────────────────────────────
+  // Purely a client-side display timer, separate from the server's
+  // grace-period session window. Counts down once per second after a
+  // successful reveal; when it hits zero, the plaintext is wiped from React
+  // state (not just visually hidden) so it no longer exists in memory.
+  useEffect(() => {
+    if (viewSecondsLeft === null || viewSecondsLeft <= 0) {
+      if (viewSecondsLeft === 0 && decrypted && !autoCleared) {
+        setAutoCleared(true);
+        setDecrypted(null);
+      }
+      return;
+    }
+    const timer = setTimeout(() => setViewSecondsLeft(s => (s !== null ? s - 1 : null)), 1000);
+    return () => clearTimeout(timer);
+  }, [viewSecondsLeft, decrypted, autoCleared]);
+
   // ── Render: READ VIEW ──────────────────────────────────────────────────
   if (route.view === 'read') {
     return (
@@ -503,6 +808,18 @@ export default function App() {
 
             {readState === 'error' && (
               <div style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>{readError}</div>
+            )}
+
+            {readState === 'frozen' && (
+              <div>
+                <div style={{ marginBottom: '14px' }}>
+                  <Badge tone="warning">Temporarily frozen by sender</Badge>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: 1.6 }}>
+                  This note's sender has temporarily locked it. It still exists and has not expired — try
+                  this link again later, or contact the sender.
+                </div>
+              </div>
             )}
 
             {readState === 'passphrase_required' && (
@@ -616,6 +933,11 @@ export default function App() {
                     <Badge tone="warning">BURNED AFTER THIS READ — it no longer exists on the server</Badge>
                   </div>
                 )}
+                {viewSecondsLeft !== null && viewSecondsLeft > 0 && (
+                  <div style={{ marginBottom: '14px' }}>
+                    <Badge tone="accent">Clearing from screen in {viewSecondsLeft}s</Badge>
+                  </div>
+                )}
                 <div style={{
                   background: 'var(--bg-input)', border: '1px solid var(--border-dim)',
                   borderRadius: 'var(--radius-sm)', padding: '16px 18px', fontSize: '14px',
@@ -629,6 +951,19 @@ export default function App() {
                 </div>
               </>
             )}
+
+            {(readState === 'ready' || readState === 'burned') && !decrypted && autoCleared && (
+              <div>
+                <div style={{ marginBottom: '14px' }}>
+                  <Badge tone="dim">Cleared from screen</Badge>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: 1.6 }}>
+                  This note's sender-set view duration elapsed, so the text has been removed from this
+                  page's memory. {readState === 'burned' ? "It was already deleted from the server when you revealed it." : 'Reopen the link to view it again, if it has not expired.'}
+                </div>
+              </div>
+            )}
+
           </Card>
         </div>
       </Shell>
@@ -689,7 +1024,55 @@ export default function App() {
               <ModeButton active={usePassphrase} onClick={() => setUsePassphrase(v => !v)}>
                 {usePassphrase ? 'Passphrase: on' : 'Add passphrase'}
               </ModeButton>
+
+              <ModeButton active={enableTracking} onClick={() => setEnableTracking(v => !v)}>
+                {enableTracking ? 'Delivery tracking: on' : 'Track delivery'}
+              </ModeButton>
+
+              <ModeButton active={viewDurationEnabled} onClick={() => setViewDurationEnabled(v => !v)}>
+                {viewDurationEnabled ? `Auto-clear: ${viewDurationSeconds}s` : 'Set view duration'}
+              </ModeButton>
             </div>
+
+            {viewDurationEnabled && (
+              <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <input
+                  type="range"
+                  min={MIN_VIEW_DURATION}
+                  max={MAX_VIEW_DURATION}
+                  step={5}
+                  value={viewDurationSeconds}
+                  onChange={e => setViewDurationSeconds(Number(e.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', minWidth: '70px', textAlign: 'right' }}>
+                  {viewDurationSeconds}s on screen
+                </span>
+              </div>
+            )}
+
+            {enableTracking && (
+              <div style={{ marginTop: '12px' }}>
+                <input
+                  type="text"
+                  value={trackingTitle}
+                  onChange={e => setTrackingTitle(e.target.value.slice(0, 80))}
+                  placeholder='Optional label for your tracking dashboard (e.g. "Wifi password for Sam") — never the note content'
+                  style={{
+                    width: '100%', background: 'var(--bg-input)', color: 'var(--text-primary)',
+                    border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                    padding: '9px 12px', fontSize: '13px', fontFamily: 'inherit',
+                    transition: 'border-color var(--transition)',
+                  }}
+                  onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                  onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
+                />
+                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.6 }}>
+                  This label is stored separately from the note and is never derived from what you typed above —
+                  it only ever appears in your own tracking dashboard, never on the server in connection with the note's content.
+                </div>
+              </div>
+            )}
 
             {usePassphrase && (
               <div style={{ marginTop: '12px' }}>
@@ -769,12 +1152,191 @@ export default function App() {
                 {shareLink.hasPassphrase && (
                   <Badge tone="accent">Passphrase required</Badge>
                 )}
+                {shareLink.trackingToken && (
+                  <Badge tone="success">Tracking enabled</Badge>
+                )}
               </div>
               {shareLink.hasPassphrase && (
                 <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                   Remember to share the passphrase with your recipient separately — it is not in this link.
                 </div>
               )}
+              {shareLink.trackingToken && (
+                <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  Delivery status for this note now appears in the tracking dashboard below — the tracking
+                  token stays in this browser's storage and was never sent to the server, only its hash was.
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* Delivery tracking dashboard */}
+          {trackedNotes.length > 0 && (
+            <Card
+              title="DELIVERY TRACKING"
+              subtitle="Status checked locally by your browser. The server only ever sees a hash of each tracking token — never the raw token, never what a note contained."
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '11px', flexWrap: 'wrap', gap: '8px' }}>
+                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                  {trackedNotes.length} tracked note{trackedNotes.length === 1 ? '' : 's'} (this browser only)
+                  {trackedNotes.length > 5 && ' — consider clearing old entries below'}
+                </span>
+                <button
+                  onClick={checkAllTrackingStatuses}
+                  disabled={trackingLoading}
+                  style={{
+                    padding: '4px 13px', background: 'transparent', border: '1px solid var(--border-base)',
+                    borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontFamily: 'inherit',
+                    fontSize: '10.5px', fontWeight: 600, opacity: trackingLoading ? 0.5 : 1,
+                  }}
+                >
+                  {trackingLoading ? 'Checking...' : 'Refresh status'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {trackedNotes.map(entry => {
+                  const status = trackingStatuses[entry.noteId];
+                  const toneMap = {
+                    active: 'warning', viewed: 'success', expired: 'dim',
+                    consuming: 'accent', frozen: 'accent', destroyed: 'dim', unknown: 'dim',
+                  };
+                  const labelMap = {
+                    active: 'Unread — still in the vault',
+                    viewed: status?.viewedAt ? `Viewed at ${status.viewedAt.slice(0, 16)} UTC` : 'Viewed',
+                    expired: 'Expired unread',
+                    consuming: 'Being read right now\u2026',
+                    frozen: 'Frozen by you',
+                    destroyed: 'Destroyed by you',
+                    unknown: 'Status unavailable',
+                  };
+                  const statusKey = status?.status || 'unknown';
+                  const tone = toneMap[statusKey] || 'dim';
+                  const label = status ? (labelMap[statusKey] || statusKey) : 'Checking...';
+                  const isManaging = managingNoteId === entry.noteId;
+                  const canManage = statusKey === 'active' || statusKey === 'frozen';
+                  const isExpireMode = entry.mode === 'expire';
+                  const isFinal = statusKey === 'viewed' || statusKey === 'expired' || statusKey === 'destroyed';
+
+                  return (
+                    <div
+                      key={entry.noteId}
+                      style={{
+                        padding: '10px 0', borderBottom: '1px solid var(--border-dim)', fontSize: '11.5px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: 'var(--text-primary)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {entry.title || '(untitled note)'}
+                          </div>
+                          <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>
+                            {entry.noteId.slice(0, 10)} &middot; {entry.mode} &middot; {entry.createdAt?.slice(0, 16)} UTC
+                            {status?.expiresAt && ` \u00b7 expires ${status.expiresAt.slice(0, 16)} UTC`}
+                          </div>
+                        </div>
+                        <Badge tone={tone}>{label}</Badge>
+                      </div>
+
+                      {canManage && (
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            onClick={() => handleToggleFreeze(entry)}
+                            disabled={isManaging}
+                            style={{
+                              padding: '4px 10px', background: 'transparent',
+                              border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                              color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: '10px',
+                              fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                            }}
+                          >
+                            {statusKey === 'frozen' ? 'Unfreeze' : 'Freeze'}
+                          </button>
+
+                          {isExpireMode && (
+                            <button
+                              onClick={() => setExtendInputFor(extendInputFor === entry.noteId ? null : entry.noteId)}
+                              disabled={isManaging}
+                              style={{
+                                padding: '4px 10px', background: 'transparent',
+                                border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                                color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: '10px',
+                                fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                              }}
+                            >
+                              Extend
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => handleDestroy(entry)}
+                            disabled={isManaging}
+                            style={{
+                              padding: '4px 10px', background: 'transparent',
+                              border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)',
+                              color: 'var(--danger)', fontFamily: 'inherit', fontSize: '10px',
+                              fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                            }}
+                          >
+                            Destroy now
+                          </button>
+                        </div>
+                      )}
+
+                      {extendInputFor === entry.noteId && (
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                          <select
+                            value={extendHours}
+                            onChange={e => setExtendHours(Number(e.target.value))}
+                            style={{
+                              background: 'var(--bg-input)', color: 'var(--text-primary)',
+                              border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                              padding: '4px 8px', fontSize: '11px', fontFamily: 'inherit',
+                            }}
+                          >
+                            <option value={1}>+1 hour</option>
+                            <option value={6}>+6 hours</option>
+                            <option value={24}>+1 day</option>
+                            <option value={72}>+3 days</option>
+                            <option value={168}>+7 days</option>
+                          </select>
+                          <button
+                            onClick={() => handleExtend(entry)}
+                            disabled={isManaging}
+                            style={{
+                              padding: '4px 12px', background: 'var(--accent)', color: '#1a1418',
+                              border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit',
+                              fontSize: '10px', fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                            }}
+                          >
+                            Confirm
+                          </button>
+                        </div>
+                      )}
+
+                      {isFinal && (
+                        <div style={{ marginTop: '6px' }}>
+                          <button
+                            onClick={() => removeTrackedEntry(entry.noteId)}
+                            style={{
+                              padding: '3px 9px', background: 'transparent', border: 'none',
+                              color: 'var(--text-muted)', fontFamily: 'inherit', fontSize: '10px',
+                              textDecoration: 'underline', cursor: 'pointer',
+                            }}
+                          >
+                            Remove from this list
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '12px', lineHeight: 1.6 }}>
+                This list lives only in this browser's local storage. Clearing site data or switching
+                browsers/devices loses it — there is no account or server-side record tying notes back to you.
+              </div>
             </Card>
           )}
 
@@ -847,6 +1409,10 @@ export default function App() {
                 <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Optional passphrase, PBKDF2-stretched</div>
                 A second factor the server never sees: 100,000 PBKDF2 iterations derive the AES key from a passphrase known only to sender and recipient.
               </div>
+              <div>
+                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Optional delivery tracking</div>
+                The server stores only a hash of a sender-generated token — never the token, never your identity, never note content. It can confirm a note was viewed, nothing more.
+              </div>
             </div>
           </Card>
         </div>
@@ -908,7 +1474,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         {children}
 
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-          Zero-Knowledge Note Vault v3.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
+          Zero-Knowledge Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>

@@ -217,9 +217,12 @@ export default function App() {
   const [logLoading, setLogLoading] = useState(false);
 
   // Read pane
-  const [readState, setReadState] = useState('idle'); // idle | loading | ready | error | burned
+  // idle -> checking -> gated (waiting for click) -> revealing -> ready/burned
+  //                  \-> error
+  const [readState, setReadState] = useState('idle');
   const [readError, setReadError] = useState(null);
   const [decrypted, setDecrypted] = useState(null);
+  const [noteMeta, setNoteMeta] = useState(null); // { mode } from the safe /status peek
 
   // System log
   const [termLines, setTermLines] = useState([
@@ -329,11 +332,14 @@ export default function App() {
     }
   };
 
-  // ── Read note flow (runs when route.view === 'read') ──────────────────
+  // ── On load (route.view === 'read'): SAFE peek only ────────────────────
+  // This calls /status, which never burns the note and never returns
+  // ciphertext. Safe for link-preview bots (WhatsApp, Telegram, Slack, etc.)
+  // to hit automatically — it cannot consume a one-time read.
   useEffect(() => {
     if (route.view !== 'read') return;
     (async () => {
-      setReadState('loading');
+      setReadState('checking');
       setReadError(null);
 
       if (!route.key) {
@@ -343,7 +349,7 @@ export default function App() {
       }
 
       try {
-        const res = await fetch(`${API_BASE}/api/notes/${route.noteId}`);
+        const res = await fetch(`${API_BASE}/api/notes/${route.noteId}/status`);
         if (res.status === 404) {
           setReadState('error');
           setReadError('This note was not found. It may have already been viewed (burn-after-read) or has expired.');
@@ -353,19 +359,47 @@ export default function App() {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.detail || `HTTP ${res.status}`);
         }
-
         const data = await res.json();
-        const key = await importKeyRaw(route.key);
-        const plaintext = await decryptText(key, data.ciphertext, data.iv);
-
-        setDecrypted({ text: plaintext, mode: data.mode });
-        setReadState(data.mode === 'burn' ? 'burned' : 'ready');
+        setNoteMeta({ mode: data.mode });
+        setReadState('gated'); // waiting for the user to deliberately click reveal
       } catch (err) {
         setReadState('error');
-        setReadError('Decryption failed. The key may be incorrect or the ciphertext corrupted.');
+        setReadError('Could not reach the vault to check this note.');
       }
     })();
   }, [route]);
+
+  // ── Deliberate user click: DESTRUCTIVE reveal ──────────────────────────
+  // Only this function calls POST /reveal. It never runs on page load, only
+  // in direct response to the button's onClick — so an automated fetch can
+  // never trigger it, even by accident.
+  const handleReveal = async () => {
+    setReadState('revealing');
+    setReadError(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/notes/${route.noteId}/reveal`, { method: 'POST' });
+      if (res.status === 404) {
+        setReadState('error');
+        setReadError('This note was not found. It may have already been viewed (burn-after-read) or has expired.');
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      const key = await importKeyRaw(route.key);
+      const plaintext = await decryptText(key, data.ciphertext, data.iv);
+
+      setDecrypted({ text: plaintext, mode: data.mode });
+      setReadState(data.mode === 'burn' ? 'burned' : 'ready');
+    } catch (err) {
+      setReadState('error');
+      setReadError('Decryption failed. The key may be incorrect or the ciphertext corrupted.');
+    }
+  };
 
   // ── Render: READ VIEW ──────────────────────────────────────────────────
   if (route.view === 'read') {
@@ -377,12 +411,50 @@ export default function App() {
             subtitle="Decryption happens in this browser only. The server never had your key."
             borderColor={readState === 'error' ? 'var(--danger)' : 'var(--border-base)'}
           >
-            {readState === 'loading' && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Retrieving and decrypting…</div>
+            {readState === 'checking' && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Checking note status…</div>
             )}
 
             {readState === 'error' && (
               <div style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>{readError}</div>
+            )}
+
+            {readState === 'gated' && (
+              <div>
+                <div style={{ marginBottom: '16px' }}>
+                  <Badge tone={noteMeta?.mode === 'burn' ? 'warning' : 'accent'}>
+                    {noteMeta?.mode === 'burn' ? 'This note will burn after you reveal it' : 'This note can be revealed until it expires'}
+                  </Badge>
+                </div>
+                <div style={{
+                  background: 'var(--bg-input)', border: '1px dashed var(--border-base)',
+                  borderRadius: 'var(--radius-sm)', padding: '28px 18px', textAlign: 'center',
+                  marginBottom: '14px',
+                }}>
+                  <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.6 }}>
+                    {noteMeta?.mode === 'burn'
+                      ? 'Decrypting now will permanently delete this note from the vault. This cannot be undone.'
+                      : 'Click below to decrypt this note in your browser.'}
+                  </div>
+                  <button
+                    onClick={handleReveal}
+                    style={{
+                      padding: '11px 26px', background: 'var(--accent)', color: '#1a1418',
+                      border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit',
+                      fontWeight: 600, fontSize: '13px', letterSpacing: '0.3px',
+                    }}
+                  >
+                    Click to reveal
+                  </button>
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                  Checking this link does not consume it — link previews from messaging apps cannot burn this note. Only this button does.
+                </div>
+              </div>
+            )}
+
+            {readState === 'revealing' && (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Decrypting in your browser…</div>
             )}
 
             {(readState === 'ready' || readState === 'burned') && decrypted && (
@@ -645,7 +717,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         {children}
 
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-          Zero-Knowledge Note Vault v3.0.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
+          Zero-Knowledge Note Vault v3.1.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>

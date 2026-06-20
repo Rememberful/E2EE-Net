@@ -17,11 +17,13 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 # ─── App Bootstrap ─────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Zero-Knowledge Note Vault API",
-    version="3.0.0",
+    version="3.1.0",
     description=(
         "Blind ciphertext storage. The server never receives, generates, or stores "
         "a decryption key — all encryption and decryption happens client-side. "
-        "The server cannot read note contents under any circumstance."
+        "The server cannot read note contents under any circumstance. Reads are "
+        "split into a non-destructive 'status' peek (safe for bots/link previews) "
+        "and a destructive 'reveal' (POST, fired only on deliberate user click)."
     ),
     docs_url="/docs",
     redoc_url=None,
@@ -174,13 +176,38 @@ def create_note(payload: CreateNoteRequest, request: Request):
     }
 
 
-@app.get("/api/notes/{note_id}", response_model=NoteResponse, tags=["vault"])
-@limiter.limit("30/minute")
-def get_note(note_id: str, request: Request):
+@app.get("/api/notes/{note_id}/status", tags=["vault"])
+@limiter.limit("60/minute")
+def peek_note(note_id: str, request: Request):
     """
-    Returns the raw ciphertext + IV for a note. Decryption happens entirely in
-    the requester's browser using the key from the URL fragment — a value this
-    endpoint never receives and the server never has access to.
+    Non-destructive existence check. Safe for link-preview bots (WhatsApp,
+    Telegram, Slack, iMessage, etc.) to call — it never burns a one-time note
+    and never returns ciphertext. Used by the frontend to render the
+    "Click to reveal" gate before the user deliberately commits to opening it.
+    """
+    _purge_expired()
+    rec = vault.get(note_id)
+
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Note not found, already viewed, or expired.")
+
+    return {
+        "id": rec["id"],
+        "mode": rec["mode"],
+        "exists": True,
+    }
+
+
+@app.post("/api/notes/{note_id}/reveal", response_model=NoteResponse, tags=["vault"])
+@limiter.limit("30/minute")
+def reveal_note(note_id: str, request: Request):
+    """
+    Destructive read. Returns ciphertext + IV and, for burn-mode notes,
+    deletes the record immediately afterward. This is intentionally a POST
+    (not GET) so that automated link-preview fetchers — which only ever issue
+    GET requests — cannot trigger it, even by accident. The frontend only
+    calls this in direct response to a deliberate user click on
+    "Click to reveal," never on page load.
     """
     _purge_expired()
 
@@ -207,11 +234,11 @@ def get_note(note_id: str, request: Request):
     }
 
     if rec["mode"] == "burn":
-        del vault[note_id]  # one-time read — gone immediately after this response
-        action = "READ_AND_BURN"
+        del vault[note_id]  # one-time reveal — gone immediately after this response
+        action = "REVEAL_AND_BURN"
     else:
         rec["viewed"] = True
-        action = "READ"
+        action = "REVEAL"
 
     _append_audit({
         "id": note_id, "timestamp": _iso(now), "client_id": None,
@@ -219,7 +246,7 @@ def get_note(note_id: str, request: Request):
         "mode": rec["mode"], "payload_size_bytes": len(rec["ciphertext"]),
     })
 
-    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE RETRIEVED | action={action} | server cannot read contents")
+    print(f"[{_iso(now)}] [{note_id[:8]}] NOTE REVEALED | action={action} | server cannot read contents")
 
     return response
 
@@ -241,7 +268,7 @@ def server_info():
     """Non-sensitive runtime metadata for the UI dashboard."""
     _purge_expired()
     return {
-        "version": "3.0.0",
+        "version": "3.1.0",
         "architecture": "Zero-Knowledge Blind Vault (AES-256-GCM, client-side keys only)",
         "vault_capacity": MAX_VAULT_SIZE,
         "vault_used": len(vault),

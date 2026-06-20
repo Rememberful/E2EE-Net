@@ -1473,9 +1473,105 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
 
         {children}
 
+        <ContactFooter />
+
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
           Zero-Knowledge Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Inline icon set (no external icon library — keeps the app dependency-free) ──
+function IconPhone() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
+    </svg>
+  );
+}
+function IconMail() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <path d="m22 6-10 7L2 6" />
+    </svg>
+  );
+}
+function IconLinkedIn() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45z" />
+    </svg>
+  );
+}
+function IconGitHub() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.4 7.86 10.93.57.1.78-.25.78-.55 0-.27-.01-1.16-.02-2.1-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.74.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.07 11.07 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.64 1.58.24 2.75.12 3.04.74.81 1.19 1.83 1.19 3.09 0 4.41-2.7 5.39-5.26 5.67.41.36.78 1.06.78 2.15 0 1.55-.01 2.8-.01 3.18 0 .31.21.66.79.55A10.51 10.51 0 0 0 23.5 12c0-6.35-5.15-11.5-11.5-11.5z" />
+    </svg>
+  );
+}
+function IconMedium() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M2.5 6.5c0-.5-.02-.9-.4-1.32L.4 3.3V3h6.36l4.92 10.78L16.04 3h6.06v.3l-1.45 1.4a.43.43 0 0 0-.16.41v10.36c0 .1.04.32.16.41l1.42 1.4v.3h-7.13v-.3l1.47-1.43c.14-.14.14-.18.14-.41V6.93l-4.1 10.41h-.55L7.18 6.93v6.97c-.04.3.06.6.27.82l1.91 2.32v.3H3.8v-.3l1.91-2.32a.97.97 0 0 0 .25-.82V6.5z" />
+    </svg>
+  );
+}
+function IconCode() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m16 18 6-6-6-6" />
+      <path d="m8 6-6 6 6 6" />
+    </svg>
+  );
+}
+
+function ContactLink({ href, icon, label }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '7px',
+        padding: '7px 13px', border: '1px solid var(--border-base)',
+        borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+        fontSize: '11.5px', fontWeight: 500, textDecoration: 'none',
+        transition: 'border-color 150ms ease, color 150ms ease',
+        whiteSpace: 'nowrap',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-base)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+    >
+      {icon}
+      {label}
+    </a>
+  );
+}
+
+function ContactFooter() {
+  return (
+    <div style={{
+      marginTop: '32px', paddingTop: '22px', borderTop: '1px solid var(--border-base)',
+    }}>
+      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', letterSpacing: '0.4px', fontWeight: 600, marginBottom: '12px', textAlign: 'center' }}>
+        CONTACT THE DEVELOPER
+      </div>
+      <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '14px' }}>
+        Built by <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Aditya Kumar</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px' }}>
+        <ContactLink href="tel:+917079487671" icon={<IconPhone />} label="+91 70794 87671" />
+        <ContactLink href="mailto:adii.utsav@gmail.com" icon={<IconMail />} label="adii.utsav@gmail.com" />
+        <ContactLink href="https://www.linkedin.com/in/aditya-kumar-3241b6286/" icon={<IconLinkedIn />} label="LinkedIn" />
+        <ContactLink href="https://github.com/Rememberful" icon={<IconGitHub />} label="GitHub" />
+        <ContactLink href="https://medium.com/@adii.utsav" icon={<IconMedium />} label="Medium" />
+      </div>
+      <div style={{ textAlign: 'center', marginTop: '14px' }}>
+        <ContactLink href="https://github.com/Rememberful/E2EE-Net.git" icon={<IconCode />} label="Contribute to this project" />
       </div>
     </div>
   );

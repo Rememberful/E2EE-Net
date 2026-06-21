@@ -181,8 +181,8 @@ This project is deployed on Render as three separate services, created individua
 
 ## Tech stack
 
-**Backend:** FastAPI, Redis (via `redis.asyncio`), slowapi, Pydantic, Uvicorn
-**Frontend:** React 18, Vite, native Web Crypto API — no encryption or icon libraries
+**Backend:** FastAPI, Redis (via `redis.asyncio`), slowapi, Pydantic, Uvicorn <br>
+**Frontend:** React 18, Vite, native Web Crypto API — no encryption or icon libraries <br>
 **Hosting:** Render (web services + free Key Value/Valkey instance)
 
 ---

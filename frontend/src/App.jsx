@@ -132,6 +132,11 @@ function base64UrlToBuf(b64url) {
 // ─── Small utils ───────────────────────────────────────────────────────────────
 const ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
+// Shared font stacks — one for normal UI text, one for IDs/keys/timestamps
+// that genuinely benefit from a monospace look.
+const FONT_UI = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+const FONT_MONO = "ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
+
 // ─── Sub-components ─────────────────────────────────────────────────────────────
 function Badge({ tone, children }) {
   const map = {
@@ -144,8 +149,8 @@ function Badge({ tone, children }) {
   const c = map[tone] || map.dim;
   return (
     <span style={{
-      border: `1px solid ${c}`, color: c, fontSize: '10.5px', fontWeight: 600,
-      padding: '3px 9px', borderRadius: 'var(--radius-sm)', letterSpacing: '0.4px',
+      background: `${c}14`, color: c, fontSize: '11.5px', fontWeight: 600,
+      padding: '4px 10px', borderRadius: '5px', fontFamily: FONT_UI,
       whiteSpace: 'nowrap',
     }}>
       {children}
@@ -155,11 +160,11 @@ function Badge({ tone, children }) {
 
 function Field({ label, value, color }) {
   return (
-    <div style={{ marginBottom: '11px' }}>
-      <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', letterSpacing: '0.4px', marginBottom: '3px', fontWeight: 500 }}>
+    <div style={{ marginBottom: '12px' }}>
+      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '3px', fontFamily: FONT_UI }}>
         {label}
       </div>
-      <div className="mono-value" style={{ color: color || 'var(--text-primary)', fontSize: '13px', wordBreak: 'break-all' }}>
+      <div className="mono-value" style={{ color: color || 'var(--text-primary)', fontSize: '13.5px', wordBreak: 'break-all', fontFamily: FONT_UI }}>
         {value || '—'}
       </div>
     </div>
@@ -173,15 +178,16 @@ function Card({ title, subtitle, borderColor, children, style }) {
       border: `1px solid ${borderColor || 'var(--border-base)'}`,
       borderRadius: 'var(--radius-lg)',
       padding: '22px 24px',
+      fontFamily: FONT_UI,
       ...style,
     }}>
       {title && (
-        <div style={{ marginBottom: '17px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--accent)', letterSpacing: '0.2px' }}>
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
             {title}
           </div>
           {subtitle && (
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '3px', lineHeight: 1.55 }}>
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '3px', lineHeight: 1.5 }}>
               {subtitle}
             </div>
           )}
@@ -200,45 +206,45 @@ function ThemeToggle({ theme, onToggle }) {
       aria-label="Toggle theme"
       style={{
         position: 'relative',
-        width: '52px',
-        height: '28px',
+        width: '44px',
+        height: '24px',
         borderRadius: '999px',
         border: '1px solid var(--border-base)',
         background: 'var(--bg-input)',
         cursor: 'pointer',
-        transition: 'background var(--transition)',
+        transition: 'background 150ms ease',
       }}
     >
       <span style={{
         position: 'absolute',
         top: '2px',
-        left: isDark ? '26px' : '2px',
-        width: '22px',
-        height: '22px',
+        left: isDark ? '21px' : '2px',
+        width: '18px',
+        height: '18px',
         borderRadius: '50%',
         background: 'var(--accent)',
-        transition: 'left var(--transition)',
+        transition: 'left 150ms ease',
       }} />
     </button>
   );
 }
 
 function AuditRow({ entry, index }) {
-  const toneMap = {
-    CREATE: 'accent', READ: 'success', READ_AND_BURN: 'warning', READ_MISS: 'danger',
+  const toneColor = {
+    CREATE: 'var(--accent)', READ: 'var(--success)', READ_AND_BURN: 'var(--warning)', READ_MISS: 'var(--danger)',
   };
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: '44px 84px 1fr 110px 64px',
-      gap: '8px', padding: '8px 0', borderBottom: '1px solid var(--border-dim)',
-      fontSize: '11.5px', alignItems: 'center',
+      display: 'grid', gridTemplateColumns: '36px 84px 1fr 110px 64px',
+      gap: '8px', padding: '9px 0', borderBottom: '1px solid var(--border-dim)',
+      fontSize: '13px', alignItems: 'center', fontFamily: FONT_UI,
     }}>
-      <span style={{ color: 'var(--text-muted)' }}>{String(index + 1).padStart(3, '0')}</span>
+      <span style={{ color: 'var(--text-muted)' }}>{index + 1}</span>
       <span style={{ color: 'var(--text-secondary)' }}>{entry.timestamp?.slice(11, 19)}</span>
       <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {entry.id?.slice(0, 10)}
       </span>
-      <span style={{ color: `var(--${toneMap[entry.action] === 'danger' ? 'danger' : toneMap[entry.action] === 'warning' ? 'warning' : toneMap[entry.action] === 'success' ? 'success' : 'accent'})`, fontWeight: 600 }}>
+      <span style={{ color: toneColor[entry.action] || 'var(--accent)', fontWeight: 600 }}>
         {entry.action}
       </span>
       <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{entry.payload_size_bytes}B</span>
@@ -289,6 +295,9 @@ export default function App() {
   const [shareLink, setShareLink] = useState(null);
   const [createError, setCreateError] = useState(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [showActivityLog, setShowActivityLog] = useState(false);
 
   // Sender-side delivery tracking dashboard
   const [trackedNotes, setTrackedNotes] = useState(() => loadTrackedNotes());
@@ -318,9 +327,9 @@ export default function App() {
   const [viewSecondsLeft, setViewSecondsLeft] = useState(null);
   const [autoCleared, setAutoCleared] = useState(false);
 
-  // System log
+  // Activity log
   const [termLines, setTermLines] = useState([
-    { t: ts(), msg: 'Zero-knowledge vault terminal initialised.', tone: 'dim' },
+    { t: ts(), msg: 'Ready.', tone: 'dim' },
   ]);
   const termRef = useRef(null);
   const log = useCallback((msg, tone = 'dim') => {
@@ -339,10 +348,10 @@ export default function App() {
         const data = await res.json();
         setServerInfo(data);
         setServerStatus('active');
-        log(`Connected to vault. Architecture: ${data.architecture}`, 'success');
+        log(`Connected. Architecture: ${data.architecture}`, 'success');
       } catch {
         setServerStatus('error');
-        log('Cannot reach backend. Is uvicorn running?', 'danger');
+        log('Cannot reach the server. Is it running?', 'danger');
       }
     })();
   }, [log]);
@@ -354,7 +363,7 @@ export default function App() {
       const data = await res.json();
       setAuditLog(data.entries || []);
     } catch {
-      log('Failed to fetch audit log.', 'danger');
+      log('Failed to fetch activity log.', 'danger');
     } finally {
       setLogLoading(false);
     }
@@ -411,7 +420,7 @@ export default function App() {
       });
       if (res.ok) {
         setTrackingStatuses(prev => ({ ...prev, [entry.noteId]: { ...prev[entry.noteId], status: 'destroyed' } }));
-        log(`Note ${entry.noteId.slice(0, 10)}… destroyed by sender.`, 'warning');
+        log(`Note ${entry.noteId.slice(0, 10)}… destroyed.`, 'warning');
       } else {
         log('Failed to destroy note — it may already be gone.', 'danger');
       }
@@ -496,11 +505,11 @@ export default function App() {
         // passphrase, the salt alone derives nothing useful.
         const tokenBytes = crypto.getRandomValues(new Uint8Array(18));
         rawToken = bufToBase64Url(tokenBytes.buffer);
-        log('Deriving AES-256 key from passphrase via PBKDF2-HMAC-SHA256 (100,000 iterations)...', 'dim');
+        log('Deriving key from passphrase (PBKDF2-HMAC-SHA256, 100,000 iterations)...', 'dim');
         key = await deriveKeyFromPassphrase(passphrase, rawToken, 'encrypt');
-        log('Key derived locally and held non-extractable — passphrase discarded from memory.', 'accent');
+        log('Key derived locally — passphrase discarded from memory.', 'accent');
       } else {
-        log('Generating ephemeral AES-256 key in-browser...', 'dim');
+        log('Generating an encryption key in your browser...', 'dim');
         key = await generateKey();
         rawToken = await exportKeyRaw(key);
       }
@@ -509,7 +518,7 @@ export default function App() {
       const { ciphertext, iv } = await encryptText(key, message);
 
       if (!usePassphrase) {
-        log('Key exported to memory only — will be embedded in URL fragment, never sent to server.', 'accent');
+        log('Key will be embedded in the link, never sent to the server.', 'accent');
       }
 
       let rawTrackingToken = null;
@@ -517,7 +526,7 @@ export default function App() {
       if (enableTracking) {
         rawTrackingToken = generateTrackingToken();
         hashedTrackingToken = await sha256Hex(rawTrackingToken);
-        log('Generated a delivery-tracking token locally — only its SHA-256 hash is sent to the server.', 'dim');
+        log('Generated a tracking token locally — only its hash is sent to the server.', 'dim');
       }
 
       const body = {
@@ -532,7 +541,7 @@ export default function App() {
         view_duration_seconds: viewDurationEnabled ? viewDurationSeconds : null,
       };
 
-      log('Transmitting ciphertext to vault (key withheld)...', 'dim');
+      log('Sending ciphertext to the server...', 'dim');
       const res = await fetch(`${API_BASE}/api/notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -551,10 +560,10 @@ export default function App() {
         hasPassphrase: usePassphrase, trackingToken: rawTrackingToken,
       });
 
-      log(`Note stored as ciphertext. id=${result.id.slice(0, 10)}… mode=${result.mode}`, 'success');
-      log('Server received zero key material. It cannot decrypt this note.', 'success');
+      log(`Note saved. id=${result.id.slice(0, 10)}… mode=${result.mode}`, 'success');
+      log('The server received no key material and cannot decrypt this note.', 'success');
       if (usePassphrase) {
-        log('Server also never received the passphrase — share it with the recipient through a different channel.', 'accent');
+        log('Share the passphrase with the recipient through a different channel than the link.', 'accent');
       }
 
       if (rawTrackingToken) {
@@ -681,7 +690,7 @@ export default function App() {
         setReadState(data.has_passphrase ? 'passphrase_required' : 'gated');
       } catch (err) {
         setReadState('error');
-        setReadError('Could not reach the vault to check this note.');
+        setReadError('Could not reach the server to check this note.');
       }
     })();
   }, [route]);
@@ -796,18 +805,18 @@ export default function App() {
   if (route.view === 'read') {
     return (
       <Shell theme={theme} onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} minimal>
-        <div style={{ maxWidth: '620px', margin: '60px auto', padding: '0 20px' }}>
+        <div style={{ maxWidth: '600px', margin: '60px auto', padding: '0 20px' }}>
           <Card
-            title="SECURE NOTE"
+            title="Secure note"
             subtitle="Decryption happens in this browser only. The server never had your key."
             borderColor={readState === 'error' ? 'var(--danger)' : 'var(--border-base)'}
           >
             {readState === 'checking' && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Checking note status…</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>Checking note status…</div>
             )}
 
             {readState === 'error' && (
-              <div style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>{readError}</div>
+              <div style={{ color: 'var(--danger)', fontSize: '14px', lineHeight: 1.6 }}>{readError}</div>
             )}
 
             {readState === 'frozen' && (
@@ -815,7 +824,7 @@ export default function App() {
                 <div style={{ marginBottom: '14px' }}>
                   <Badge tone="warning">Temporarily frozen by sender</Badge>
                 </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: 1.6 }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.6 }}>
                   This note's sender has temporarily locked it. It still exists and has not expired — try
                   this link again later, or contact the sender.
                 </div>
@@ -826,7 +835,7 @@ export default function App() {
               <div>
                 <div style={{ marginBottom: '16px' }}>
                   <Badge tone={noteMeta?.mode === 'burn' ? 'warning' : 'accent'}>
-                    {noteMeta?.mode === 'burn' ? 'Passphrase required \u2014 burns after this attempt' : 'Passphrase required'}
+                    {noteMeta?.mode === 'burn' ? 'Passphrase required — burns after this attempt' : 'Passphrase required'}
                   </Badge>
                 </div>
 
@@ -834,10 +843,10 @@ export default function App() {
                   <div style={{
                     marginBottom: '14px', padding: '10px 13px', background: 'var(--danger)15',
                     border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)',
-                    fontSize: '12.5px', color: 'var(--danger)', lineHeight: 1.55,
+                    fontSize: '13px', color: 'var(--danger)', lineHeight: 1.55,
                   }}>
                     {noteMeta?.mode === 'burn'
-                      ? 'That passphrase was incorrect, and this note was burn-after-read \u2014 it has now been permanently consumed and cannot be recovered.'
+                      ? 'That passphrase was incorrect, and this note was burn-after-read — it has now been permanently consumed and cannot be recovered.'
                       : 'That passphrase was incorrect. You can try again before this note expires.'}
                   </div>
                 )}
@@ -845,11 +854,11 @@ export default function App() {
                 <form
                   onSubmit={e => { e.preventDefault(); if (readPassphrase) handleReveal(); }}
                   style={{
-                    background: 'var(--bg-input)', border: '1px dashed var(--border-base)',
-                    borderRadius: 'var(--radius-sm)', padding: '24px 18px', marginBottom: '14px',
+                    background: 'var(--bg-input)', border: '1px solid var(--border-base)',
+                    borderRadius: 'var(--radius-sm)', padding: '20px 18px', marginBottom: '14px',
                   }}
                 >
-                  <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: 1.6 }}>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px', lineHeight: 1.6 }}>
                     {noteMeta?.mode === 'burn' && !passphraseAttemptFailed
                       ? 'This note requires a passphrase and will burn after this single attempt, whether it succeeds or not. Make sure you have the correct passphrase before submitting.'
                       : 'Enter the passphrase the sender shared with you separately.'}
@@ -863,7 +872,8 @@ export default function App() {
                     style={{
                       width: '100%', background: 'var(--bg-root)', color: 'var(--text-primary)',
                       border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                      padding: '10px 13px', fontSize: '13px', fontFamily: 'inherit', marginBottom: '14px',
+                      padding: '10px 13px', fontSize: '14px', fontFamily: FONT_UI, marginBottom: '14px',
+                      boxSizing: 'border-box',
                     }}
                   />
                   <button
@@ -872,15 +882,15 @@ export default function App() {
                     style={{
                       padding: '10px 24px', background: readPassphrase ? 'var(--accent)' : 'var(--border-base)',
                       color: '#1a1418', border: 'none', borderRadius: 'var(--radius-sm)',
-                      fontFamily: 'inherit', fontWeight: 600, fontSize: '13px',
-                      opacity: readPassphrase ? 1 : 0.55, width: '100%',
+                      fontFamily: FONT_UI, fontWeight: 600, fontSize: '14px',
+                      opacity: readPassphrase ? 1 : 0.55, width: '100%', cursor: readPassphrase ? 'pointer' : 'default',
                     }}
                   >
-                    Submit & reveal
+                    Submit and reveal
                   </button>
                 </form>
 
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                   The passphrase is checked entirely in your browser. The server never sees it and cannot verify it.
                 </div>
               </div>
@@ -894,35 +904,35 @@ export default function App() {
                   </Badge>
                 </div>
                 <div style={{
-                  background: 'var(--bg-input)', border: '1px dashed var(--border-base)',
-                  borderRadius: 'var(--radius-sm)', padding: '28px 18px', textAlign: 'center',
+                  background: 'var(--bg-input)', border: '1px solid var(--border-base)',
+                  borderRadius: 'var(--radius-sm)', padding: '26px 18px', textAlign: 'center',
                   marginBottom: '14px',
                 }}>
-                  <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.6 }}>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.6 }}>
                     {noteMeta?.mode === 'burn'
-                      ? 'Decrypting now will permanently delete this note from the vault. This cannot be undone.'
+                      ? 'Decrypting now will permanently delete this note from the server. This cannot be undone.'
                       : 'Click below to decrypt this note in your browser.'}
                   </div>
                   <button
                     onClick={handleReveal}
                     style={{
                       padding: '11px 26px', background: 'var(--accent)', color: '#1a1418',
-                      border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit',
-                      fontWeight: 600, fontSize: '13px', letterSpacing: '0.3px',
+                      border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: FONT_UI,
+                      fontWeight: 600, fontSize: '14px', cursor: 'pointer',
                     }}
                   >
                     Click to reveal
                   </button>
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                   Checking this link does not consume it — link previews from messaging apps cannot burn this note. Only this button does.
                 </div>
               </div>
             )}
 
             {readState === 'revealing' && (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                {noteMeta?.hasPassphrase ? 'Deriving key and decrypting in your browser\u2026' : 'Decrypting in your browser\u2026'}
+              <div style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
+                {noteMeta?.hasPassphrase ? 'Deriving key and decrypting in your browser…' : 'Decrypting in your browser…'}
               </div>
             )}
 
@@ -930,7 +940,7 @@ export default function App() {
               <>
                 {readState === 'burned' && (
                   <div style={{ marginBottom: '14px' }}>
-                    <Badge tone="warning">BURNED AFTER THIS READ — it no longer exists on the server</Badge>
+                    <Badge tone="warning">Burned after this read — it no longer exists on the server</Badge>
                   </div>
                 )}
                 {viewSecondsLeft !== null && viewSecondsLeft > 0 && (
@@ -940,14 +950,14 @@ export default function App() {
                 )}
                 <div style={{
                   background: 'var(--bg-input)', border: '1px solid var(--border-dim)',
-                  borderRadius: 'var(--radius-sm)', padding: '16px 18px', fontSize: '14px',
+                  borderRadius: 'var(--radius-sm)', padding: '16px 18px', fontSize: '15px',
                   color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  lineHeight: 1.7,
+                  lineHeight: 1.7, fontFamily: FONT_UI,
                 }}>
                   {decrypted.text}
                 </div>
                 <div style={{ marginTop: '14px' }}>
-                  <a href="/" style={{ fontSize: '12px', color: 'var(--accent)' }}>Create a new secure note &rarr;</a>
+                  <a href="/" style={{ fontSize: '13px', color: 'var(--accent)' }}>Create a new secure note →</a>
                 </div>
               </>
             )}
@@ -957,7 +967,7 @@ export default function App() {
                 <div style={{ marginBottom: '14px' }}>
                   <Badge tone="dim">Cleared from screen</Badge>
                 </div>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '13px', lineHeight: 1.6 }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.6 }}>
                   This note's sender-set view duration elapsed, so the text has been removed from this
                   page's memory. {readState === 'burned' ? "It was already deleted from the server when you revealed it." : 'Reopen the link to view it again, if it has not expired.'}
                 </div>
@@ -976,150 +986,173 @@ export default function App() {
 
   return (
     <Shell theme={theme} onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} serverStatus={serverStatus}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '20px', alignItems: 'start' }}>
-
-        {/* Left column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '680px', margin: '0 auto' }}>
 
           {/* Compose */}
-          <Card title="COMPOSE SECURE NOTE" subtitle="Encrypted with AES-256-GCM in your browser before anything is sent.">
+          <Card title="Send a secret" subtitle="Write your message below. It's encrypted on your device before it ever reaches the server.">
             <textarea
-              rows={5}
+              rows={6}
               value={message}
               onChange={e => setMessage(e.target.value)}
-              placeholder="Type your confidential note..."
+              placeholder="Type a password, a private message, anything sensitive…"
               style={{
                 width: '100%', background: 'var(--bg-input)', color: 'var(--text-primary)',
                 border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                padding: '12px 14px', fontSize: '13.5px', fontFamily: 'inherit',
-                resize: 'vertical', lineHeight: 1.65, transition: 'border-color var(--transition)',
+                padding: '14px 16px', fontSize: '15px', fontFamily: FONT_UI,
+                resize: 'vertical', lineHeight: 1.6, transition: 'border-color 150ms ease',
+                boxSizing: 'border-box',
               }}
               onFocus={e => e.target.style.borderColor = 'var(--accent)'}
               onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
             />
-
-            <div style={{ display: 'flex', gap: '18px', marginTop: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <ModeButton active={mode === 'burn'} onClick={() => setMode('burn')}>Burn after read</ModeButton>
-                <ModeButton active={mode === 'expire'} onClick={() => setMode('expire')}>Expire after time</ModeButton>
-              </div>
-              {mode === 'expire' && (
-                <select
-                  value={ttlHours}
-                  onChange={e => setTtlHours(Number(e.target.value))}
-                  style={{
-                    background: 'var(--bg-input)', color: 'var(--text-primary)',
-                    border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                    padding: '6px 10px', fontSize: '12px', fontFamily: 'inherit',
-                  }}
-                >
-                  <option value={1}>1 hour</option>
-                  <option value={6}>6 hours</option>
-                  <option value={24}>24 hours</option>
-                  <option value={72}>3 days</option>
-                  <option value={168}>7 days</option>
-                </select>
-              )}
-
-              <ModeButton active={usePassphrase} onClick={() => setUsePassphrase(v => !v)}>
-                {usePassphrase ? 'Passphrase: on' : 'Add passphrase'}
-              </ModeButton>
-
-              <ModeButton active={enableTracking} onClick={() => setEnableTracking(v => !v)}>
-                {enableTracking ? 'Delivery tracking: on' : 'Track delivery'}
-              </ModeButton>
-
-              <ModeButton active={viewDurationEnabled} onClick={() => setViewDurationEnabled(v => !v)}>
-                {viewDurationEnabled ? `Auto-clear: ${viewDurationSeconds}s` : 'Set view duration'}
-              </ModeButton>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'right' }}>
+              {message.length} characters
             </div>
 
-            {viewDurationEnabled && (
-              <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <input
-                  type="range"
-                  min={MIN_VIEW_DURATION}
-                  max={MAX_VIEW_DURATION}
-                  step={5}
-                  value={viewDurationSeconds}
-                  onChange={e => setViewDurationSeconds(Number(e.target.value))}
-                  style={{ flex: 1 }}
-                />
-                <span style={{ fontSize: '12px', color: 'var(--text-secondary)', minWidth: '70px', textAlign: 'right' }}>
-                  {viewDurationSeconds}s on screen
-                </span>
+            <div style={{ marginTop: '16px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+                When should this disappear?
               </div>
-            )}
-
-            {enableTracking && (
-              <div style={{ marginTop: '12px' }}>
-                <input
-                  type="text"
-                  value={trackingTitle}
-                  onChange={e => setTrackingTitle(e.target.value.slice(0, 80))}
-                  placeholder='Optional label for your tracking dashboard (e.g. "Wifi password for Sam") — never the note content'
-                  style={{
-                    width: '100%', background: 'var(--bg-input)', color: 'var(--text-primary)',
-                    border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                    padding: '9px 12px', fontSize: '13px', fontFamily: 'inherit',
-                    transition: 'border-color var(--transition)',
-                  }}
-                  onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-                  onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <RadioCard
+                  active={mode === 'burn'}
+                  onClick={() => setMode('burn')}
+                  title="After it's read once"
+                  subtitle="Deleted the moment your recipient opens it"
                 />
-                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.6 }}>
-                  This label is stored separately from the note and is never derived from what you typed above —
-                  it only ever appears in your own tracking dashboard, never on the server in connection with the note's content.
+                <RadioCard
+                  active={mode === 'expire'}
+                  onClick={() => setMode('expire')}
+                  title="After some time"
+                  subtitle="Stays available until it expires, even if unread"
+                />
+              </div>
+              {mode === 'expire' && (
+                <div style={{ marginTop: '10px' }}>
+                  <select
+                    value={ttlHours}
+                    onChange={e => setTtlHours(Number(e.target.value))}
+                    style={{
+                      background: 'var(--bg-input)', color: 'var(--text-primary)',
+                      border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                      padding: '8px 12px', fontSize: '13.5px', fontFamily: FONT_UI,
+                    }}
+                  >
+                    <option value={1}>Expires in 1 hour</option>
+                    <option value={6}>Expires in 6 hours</option>
+                    <option value={24}>Expires in 24 hours</option>
+                    <option value={72}>Expires in 3 days</option>
+                    <option value={168}>Expires in 7 days</option>
+                  </select>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            {usePassphrase && (
-              <div style={{ marginTop: '12px' }}>
-                <input
-                  type="password"
-                  value={passphrase}
-                  onChange={e => setPassphrase(e.target.value)}
-                  placeholder="Shared secret (min 8 characters) — share this separately from the link"
-                  style={{
-                    width: '100%', background: 'var(--bg-input)', color: 'var(--text-primary)',
-                    border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                    padding: '9px 12px', fontSize: '13px', fontFamily: 'inherit',
-                    transition: 'border-color var(--transition)',
-                  }}
-                  onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-                  onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
-                />
-                <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.6 }}>
-                  This passphrase is never sent to the server. Send it to the recipient through a
-                  different channel than the link itself — a text message, a call, in person.
+            <div style={{ marginTop: '18px', borderTop: '1px solid var(--border-dim)', paddingTop: '14px' }}>
+              <Collapsible
+                open={showAdvanced}
+                onToggle={() => setShowAdvanced(v => !v)}
+                label="Add a passphrase, tracking, or auto-clear timer"
+                openLabel="Hide extra options"
+              >
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <Switch
+                    checked={usePassphrase}
+                    onChange={() => setUsePassphrase(v => !v)}
+                    label="Require a passphrase to open"
+                    description="An extra word or phrase the recipient must enter — share it separately from the link itself"
+                  />
+                  {usePassphrase && (
+                    <div style={{ marginBottom: '8px', paddingLeft: '50px' }}>
+                      <input
+                        type="password"
+                        value={passphrase}
+                        onChange={e => setPassphrase(e.target.value)}
+                        placeholder="At least 8 characters"
+                        style={{
+                          width: '100%', maxWidth: '360px', background: 'var(--bg-input)', color: 'var(--text-primary)',
+                          border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                          padding: '9px 12px', fontSize: '13.5px', fontFamily: FONT_UI,
+                          transition: 'border-color 150ms ease', boxSizing: 'border-box',
+                        }}
+                        onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                        onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
+                      />
+                    </div>
+                  )}
+
+                  <Switch
+                    checked={enableTracking}
+                    onChange={() => setEnableTracking(v => !v)}
+                    label="Let me see when it's opened"
+                    description="Adds this note to your delivery tracker below — the server only learns a status, never the note's content"
+                  />
+                  {enableTracking && (
+                    <div style={{ marginBottom: '8px', paddingLeft: '50px' }}>
+                      <input
+                        type="text"
+                        value={trackingTitle}
+                        onChange={e => setTrackingTitle(e.target.value.slice(0, 80))}
+                        placeholder='Label for your own reference, e.g. "Wifi password for Sam"'
+                        style={{
+                          width: '100%', maxWidth: '360px', background: 'var(--bg-input)', color: 'var(--text-primary)',
+                          border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
+                          padding: '9px 12px', fontSize: '13.5px', fontFamily: FONT_UI,
+                          transition: 'border-color 150ms ease', boxSizing: 'border-box',
+                        }}
+                        onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                        onBlur={e => e.target.style.borderColor = 'var(--border-base)'}
+                      />
+                    </div>
+                  )}
+
+                  <Switch
+                    checked={viewDurationEnabled}
+                    onChange={() => setViewDurationEnabled(v => !v)}
+                    label="Clear it from the screen automatically"
+                    description="After opening, the text disappears on its own so it isn't left visible"
+                  />
+                  {viewDurationEnabled && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '50px', marginBottom: '8px' }}>
+                      <input
+                        type="range"
+                        min={MIN_VIEW_DURATION}
+                        max={MAX_VIEW_DURATION}
+                        step={5}
+                        value={viewDurationSeconds}
+                        onChange={e => setViewDurationSeconds(Number(e.target.value))}
+                        style={{ flex: 1, maxWidth: '260px' }}
+                      />
+                      <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                        {viewDurationSeconds}s
+                      </span>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              </Collapsible>
+            </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', gap: '10px' }}>
-              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
-                {message.length} characters
-              </span>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '18px' }}>
               <button
                 onClick={handleCreate}
                 disabled={!canSend}
                 style={{
-                  padding: '10px 22px',
+                  padding: '12px 26px',
                   background: canSend ? 'var(--accent)' : 'var(--border-base)',
                   color: '#1a1418',
                   border: 'none', borderRadius: 'var(--radius-sm)',
-                  fontFamily: 'inherit', fontWeight: 600, fontSize: '12.5px',
-                  letterSpacing: '0.3px', opacity: canSend ? 1 : 0.55,
-                  transition: 'opacity var(--transition)', minWidth: '210px',
+                  fontFamily: FONT_UI, fontWeight: 600, fontSize: '14.5px',
+                  opacity: canSend ? 1 : 0.55,
+                  transition: 'opacity 150ms ease', minWidth: '220px',
+                  cursor: canSend ? 'pointer' : 'default',
                 }}
               >
-                {creating ? 'Encrypting...' : 'Encrypt & Generate Link'}
+                {creating ? 'Encrypting…' : 'Create secure link'}
               </button>
             </div>
 
             {createError && (
-              <div style={{ marginTop: '12px', padding: '10px 13px', background: 'var(--danger)15', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: '12.5px', color: 'var(--danger)' }}>
+              <div style={{ marginTop: '12px', padding: '10px 13px', background: 'var(--danger)15', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: '13px', color: 'var(--danger)' }}>
                 {createError}
               </div>
             )}
@@ -1127,11 +1160,12 @@ export default function App() {
 
           {/* Share link */}
           {shareLink && (
-            <Card title="SHARE LINK GENERATED" subtitle="This link contains the decryption key after the # — it is never sent to any server." borderColor="var(--accent)">
+            <Card title="Link ready" subtitle="This link contains the decryption key after the # — it is never sent to any server." borderColor="var(--accent)">
               <div style={{
                 background: 'var(--bg-input)', border: '1px solid var(--border-dim)',
-                borderRadius: 'var(--radius-sm)', padding: '12px 14px', fontSize: '12px',
+                borderRadius: 'var(--radius-sm)', padding: '12px 14px', fontSize: '13px',
                 color: 'var(--accent-strong)', wordBreak: 'break-all', marginBottom: '12px',
+                fontFamily: FONT_MONO,
               }}>
                 {shareLink.url}
               </div>
@@ -1140,8 +1174,8 @@ export default function App() {
                   onClick={copyLink}
                   style={{
                     padding: '8px 16px', background: 'transparent', border: '1px solid var(--accent)',
-                    color: 'var(--accent)', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit',
-                    fontSize: '12px', fontWeight: 600,
+                    color: 'var(--accent)', borderRadius: 'var(--radius-sm)', fontFamily: FONT_UI,
+                    fontSize: '13px', fontWeight: 600, cursor: 'pointer',
                   }}
                 >
                   {linkCopied ? 'Copied' : 'Copy link'}
@@ -1157,12 +1191,12 @@ export default function App() {
                 )}
               </div>
               {shareLink.hasPassphrase && (
-                <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                <div style={{ marginTop: '10px', fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.55 }}>
                   Remember to share the passphrase with your recipient separately — it is not in this link.
                 </div>
               )}
               {shareLink.trackingToken && (
-                <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                <div style={{ marginTop: '10px', fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.55 }}>
                   Delivery status for this note now appears in the tracking dashboard below — the tracking
                   token stays in this browser's storage and was never sent to the server, only its hash was.
                 </div>
@@ -1173,11 +1207,11 @@ export default function App() {
           {/* Delivery tracking dashboard */}
           {trackedNotes.length > 0 && (
             <Card
-              title="DELIVERY TRACKING"
+              title="Delivery tracking"
               subtitle="Status checked locally by your browser. The server only ever sees a hash of each tracking token — never the raw token, never what a note contained."
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '11px', flexWrap: 'wrap', gap: '8px' }}>
-                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
                   {trackedNotes.length} tracked note{trackedNotes.length === 1 ? '' : 's'} (this browser only)
                   {trackedNotes.length > 5 && ' — consider clearing old entries below'}
                 </span>
@@ -1185,12 +1219,12 @@ export default function App() {
                   onClick={checkAllTrackingStatuses}
                   disabled={trackingLoading}
                   style={{
-                    padding: '4px 13px', background: 'transparent', border: '1px solid var(--border-base)',
-                    borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontFamily: 'inherit',
-                    fontSize: '10.5px', fontWeight: 600, opacity: trackingLoading ? 0.5 : 1,
+                    padding: '5px 13px', background: 'transparent', border: '1px solid var(--border-base)',
+                    borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontFamily: FONT_UI,
+                    fontSize: '12px', fontWeight: 600, opacity: trackingLoading ? 0.5 : 1, cursor: 'pointer',
                   }}
                 >
-                  {trackingLoading ? 'Checking...' : 'Refresh status'}
+                  {trackingLoading ? 'Checking…' : 'Refresh status'}
                 </button>
               </div>
 
@@ -1202,17 +1236,17 @@ export default function App() {
                     consuming: 'accent', frozen: 'accent', destroyed: 'dim', unknown: 'dim',
                   };
                   const labelMap = {
-                    active: 'Unread — still in the vault',
+                    active: 'Unread',
                     viewed: status?.viewedAt ? `Viewed at ${status.viewedAt.slice(0, 16)} UTC` : 'Viewed',
                     expired: 'Expired unread',
-                    consuming: 'Being read right now\u2026',
+                    consuming: 'Being read right now…',
                     frozen: 'Frozen by you',
                     destroyed: 'Destroyed by you',
                     unknown: 'Status unavailable',
                   };
                   const statusKey = status?.status || 'unknown';
                   const tone = toneMap[statusKey] || 'dim';
-                  const label = status ? (labelMap[statusKey] || statusKey) : 'Checking...';
+                  const label = status ? (labelMap[statusKey] || statusKey) : 'Checking…';
                   const isManaging = managingNoteId === entry.noteId;
                   const canManage = statusKey === 'active' || statusKey === 'frozen';
                   const isExpireMode = entry.mode === 'expire';
@@ -1222,17 +1256,17 @@ export default function App() {
                     <div
                       key={entry.noteId}
                       style={{
-                        padding: '10px 0', borderBottom: '1px solid var(--border-dim)', fontSize: '11.5px',
+                        padding: '10px 0', borderBottom: '1px solid var(--border-dim)', fontSize: '13px',
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ color: 'var(--text-primary)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {entry.title || '(untitled note)'}
+                            {entry.title || 'Untitled note'}
                           </div>
-                          <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>
-                            {entry.noteId.slice(0, 10)} &middot; {entry.mode} &middot; {entry.createdAt?.slice(0, 16)} UTC
-                            {status?.expiresAt && ` \u00b7 expires ${status.expiresAt.slice(0, 16)} UTC`}
+                          <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginTop: '2px' }}>
+                            {entry.noteId.slice(0, 10)} · {entry.mode} · {entry.createdAt?.slice(0, 16)} UTC
+                            {status?.expiresAt && ` · expires ${status.expiresAt.slice(0, 16)} UTC`}
                           </div>
                         </div>
                         <Badge tone={tone}>{label}</Badge>
@@ -1246,8 +1280,8 @@ export default function App() {
                             style={{
                               padding: '4px 10px', background: 'transparent',
                               border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                              color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: '10px',
-                              fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                              color: 'var(--text-secondary)', fontFamily: FONT_UI, fontSize: '12px',
+                              fontWeight: 600, opacity: isManaging ? 0.5 : 1, cursor: 'pointer',
                             }}
                           >
                             {statusKey === 'frozen' ? 'Unfreeze' : 'Freeze'}
@@ -1260,8 +1294,8 @@ export default function App() {
                               style={{
                                 padding: '4px 10px', background: 'transparent',
                                 border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                                color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: '10px',
-                                fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                                color: 'var(--text-secondary)', fontFamily: FONT_UI, fontSize: '12px',
+                                fontWeight: 600, opacity: isManaging ? 0.5 : 1, cursor: 'pointer',
                               }}
                             >
                               Extend
@@ -1274,8 +1308,8 @@ export default function App() {
                             style={{
                               padding: '4px 10px', background: 'transparent',
                               border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)',
-                              color: 'var(--danger)', fontFamily: 'inherit', fontSize: '10px',
-                              fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                              color: 'var(--danger)', fontFamily: FONT_UI, fontSize: '12px',
+                              fontWeight: 600, opacity: isManaging ? 0.5 : 1, cursor: 'pointer',
                             }}
                           >
                             Destroy now
@@ -1291,7 +1325,7 @@ export default function App() {
                             style={{
                               background: 'var(--bg-input)', color: 'var(--text-primary)',
                               border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)',
-                              padding: '4px 8px', fontSize: '11px', fontFamily: 'inherit',
+                              padding: '5px 8px', fontSize: '12px', fontFamily: FONT_UI,
                             }}
                           >
                             <option value={1}>+1 hour</option>
@@ -1304,9 +1338,9 @@ export default function App() {
                             onClick={() => handleExtend(entry)}
                             disabled={isManaging}
                             style={{
-                              padding: '4px 12px', background: 'var(--accent)', color: '#1a1418',
-                              border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: 'inherit',
-                              fontSize: '10px', fontWeight: 600, opacity: isManaging ? 0.5 : 1,
+                              padding: '5px 12px', background: 'var(--accent)', color: '#1a1418',
+                              border: 'none', borderRadius: 'var(--radius-sm)', fontFamily: FONT_UI,
+                              fontSize: '12px', fontWeight: 600, opacity: isManaging ? 0.5 : 1, cursor: 'pointer',
                             }}
                           >
                             Confirm
@@ -1320,7 +1354,7 @@ export default function App() {
                             onClick={() => removeTrackedEntry(entry.noteId)}
                             style={{
                               padding: '3px 9px', background: 'transparent', border: 'none',
-                              color: 'var(--text-muted)', fontFamily: 'inherit', fontSize: '10px',
+                              color: 'var(--text-muted)', fontFamily: FONT_UI, fontSize: '12px',
                               textDecoration: 'underline', cursor: 'pointer',
                             }}
                           >
@@ -1333,108 +1367,111 @@ export default function App() {
                 })}
               </div>
 
-              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '12px', lineHeight: 1.6 }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '12px', lineHeight: 1.55 }}>
                 This list lives only in this browser's local storage. Clearing site data or switching
                 browsers/devices loses it — there is no account or server-side record tying notes back to you.
               </div>
             </Card>
           )}
 
-          {/* Audit log */}
-          <Card title="VAULT AUDIT LOG" subtitle="Metadata only — no ciphertext, no keys, no plaintext ever recorded here.">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '11px' }}>
-              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Last 20 vault operations</span>
-              <button
-                onClick={fetchAuditLog}
-                disabled={logLoading}
-                style={{
-                  padding: '4px 13px', background: 'transparent', border: '1px solid var(--border-base)',
-                  borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontFamily: 'inherit',
-                  fontSize: '10.5px', fontWeight: 600, opacity: logLoading ? 0.5 : 1,
-                }}
-              >
-                {logLoading ? 'Loading...' : 'Refresh'}
-              </button>
-            </div>
-            {auditLog.length === 0 ? (
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '12px 0' }}>
-                No vault activity yet. Create a note to populate the log.
+          <Collapsible
+            open={showActivityLog}
+            onToggle={() => setShowActivityLog(v => !v)}
+            label="Show activity log"
+            openLabel="Hide activity log"
+          >
+            <Card title="Activity log" subtitle="Metadata only — no ciphertext, no keys, no plaintext ever recorded here.">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Last 20 operations</span>
+                <button
+                  onClick={fetchAuditLog}
+                  disabled={logLoading}
+                  style={{
+                    padding: '5px 13px', background: 'transparent', border: '1px solid var(--border-base)',
+                    borderRadius: 'var(--radius-sm)', color: 'var(--accent)', fontFamily: FONT_UI,
+                    fontSize: '12px', fontWeight: 600, opacity: logLoading ? 0.5 : 1, cursor: 'pointer',
+                  }}
+                >
+                  {logLoading ? 'Loading…' : 'Refresh'}
+                </button>
               </div>
-            ) : (
-              <>
-                <div style={{
-                  display: 'grid', gridTemplateColumns: '44px 84px 1fr 110px 64px', gap: '8px',
-                  padding: '0 0 7px', borderBottom: '1px solid var(--border-base)',
-                  fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.3px', fontWeight: 600,
-                }}>
-                  <span>#</span><span>TIME</span><span>NOTE ID</span><span>ACTION</span><span style={{ textAlign: 'right' }}>SIZE</span>
+              {auditLog.length === 0 ? (
+                <div style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '12px 0' }}>
+                  No activity yet. Create a note to populate the log.
                 </div>
-                {auditLog.map((entry, i) => <AuditRow key={entry.id + entry.timestamp} entry={entry} index={i} />)}
-              </>
-            )}
-          </Card>
-        </div>
+              ) : (
+                <>
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: '36px 84px 1fr 110px 64px', gap: '8px',
+                    padding: '0 0 8px', borderBottom: '1px solid var(--border-base)',
+                    fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 600,
+                  }}>
+                    <span>#</span><span>Time</span><span>Note ID</span><span>Action</span><span style={{ textAlign: 'right' }}>Size</span>
+                  </div>
+                  {auditLog.map((entry, i) => <AuditRow key={entry.id + entry.timestamp} entry={entry} index={i} />)}
+                </>
+              )}
+              <div style={{ marginTop: '14px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: 600 }}>
+                  Recent activity
+                </div>
+                <div ref={termRef} style={{
+                  background: 'var(--bg-panel)', border: '1px solid var(--border-dim)',
+                  borderRadius: 'var(--radius-md)', padding: '12px 15px', height: '120px',
+                  overflowY: 'auto', fontSize: '12.5px', lineHeight: 1.8, fontFamily: FONT_UI,
+                }}>
+                  {termLines.map((line, i) => (
+                    <div key={i}>
+                      <span style={{ color: 'var(--text-muted)', marginRight: '10px' }}>{line.t.slice(11, 19)}</span>
+                      <span style={{ color: `var(--${line.tone === 'dim' ? 'text-secondary' : line.tone})` }}>{line.msg}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          </Collapsible>
 
-        {/* Right column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card title="VAULT ARCHITECTURE">
-            <Field label="MODEL" value="Zero-Knowledge Blind Vault" color="var(--accent)" />
-            <Field label="ENCRYPTION" value="AES-256-GCM (client-side)" />
-            <Field label="KEY HANDLING" value="Never transmitted to server" color="var(--success)" />
-            <Field label="STATUS" value={serverStatus === 'active' ? 'CONNECTED' : serverStatus.toUpperCase()} color={serverStatus === 'active' ? 'var(--success)' : 'var(--warning)'} />
-          </Card>
-
-          <Card title="SERVER METRICS">
-            <Field label="ENVIRONMENT" value={serverInfo?.environment?.toUpperCase() || '—'} />
-            <Field label="UPTIME" value={uptimeStr} />
-            <Field label="VAULT USED" value={serverInfo ? `${serverInfo.vault_used} / ${serverInfo.vault_capacity}` : '—'} color="var(--accent)" />
-            <Field label="VERSION" value={serverInfo?.version || '—'} />
-          </Card>
-
-          <Card title="WHY THIS IS ZERO-KNOWLEDGE">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '11px', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.65 }}>
-              <div>
-                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>URL fragment keys</div>
-                The decryption key sits after the # in the link. Browsers never send the fragment to a server on request.
+          <Collapsible
+            open={showHowItWorks}
+            onToggle={() => setShowHowItWorks(v => !v)}
+            label="How this stays private"
+            openLabel="Hide details"
+          >
+            <Card>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '14px', marginBottom: '18px' }}>
+                <Field label="Model" value="Zero-knowledge, end-to-end encrypted" color="var(--accent)" />
+                <Field label="Encryption" value="AES-256-GCM (client-side)" />
+                <Field label="Key handling" value="Never transmitted to the server" color="var(--success)" />
+                <Field label="Status" value={serverStatus === 'active' ? 'Connected' : serverStatus} color={serverStatus === 'active' ? 'var(--success)' : 'var(--warning)'} />
+                <Field label="Environment" value={serverInfo?.environment || '—'} />
+                <Field label="Uptime" value={uptimeStr} />
+                <Field label="Storage used" value={serverInfo ? `${serverInfo.vault_used} / ${serverInfo.vault_capacity}` : '—'} color="var(--accent)" />
+                <Field label="Version" value={serverInfo?.version || '—'} />
               </div>
-              <div>
-                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Server sees ciphertext only</div>
-                The vault stores opaque bytes it cannot interpret. There is no private key on the server to compromise.
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '2px' }}>Keys live in the link, not the server</div>
+                  The decryption key sits after the # in the link. Browsers never send that part of a URL to a server.
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '2px' }}>The server only sees ciphertext</div>
+                  It stores opaque bytes it cannot interpret. There's no private key on the server to compromise.
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '2px' }}>Burn after read</div>
+                  One-time notes are deleted the instant they're served — even the server operator can't re-read them.
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '2px' }}>Optional passphrase</div>
+                  A second factor the server never sees: 100,000 PBKDF2 iterations derive the key from a passphrase known only to sender and recipient.
+                </div>
+                <div>
+                  <div style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '2px' }}>Optional delivery tracking</div>
+                  The server stores only a hash of a sender-generated token — never the token, never your identity, never note content. It can confirm a note was viewed, nothing more.
+                </div>
               </div>
-              <div>
-                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Burn after read</div>
-                One-time notes are deleted the instant they're served — even the server operator cannot re-read them.
-              </div>
-              <div>
-                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Optional passphrase, PBKDF2-stretched</div>
-                A second factor the server never sees: 100,000 PBKDF2 iterations derive the AES key from a passphrase known only to sender and recipient.
-              </div>
-              <div>
-                <div style={{ color: 'var(--accent)', fontWeight: 600, marginBottom: '2px' }}>Optional delivery tracking</div>
-                The server stores only a hash of a sender-generated token — never the token, never your identity, never note content. It can confirm a note was viewed, nothing more.
-              </div>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      {/* System log */}
-      <div style={{ marginTop: '24px' }}>
-        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', letterSpacing: '0.4px', marginBottom: '7px', fontWeight: 600 }}>
-          SYSTEM LOG
-        </div>
-        <div ref={termRef} style={{
-          background: 'var(--bg-panel)', border: '1px solid var(--border-dim)',
-          borderRadius: 'var(--radius-md)', padding: '13px 15px', height: '130px',
-          overflowY: 'auto', fontSize: '11.5px', lineHeight: 1.75,
-        }}>
-          {termLines.map((line, i) => (
-            <div key={i}>
-              <span style={{ color: 'var(--text-muted)', marginRight: '10px' }}>{line.t.slice(11, 19)}</span>
-              <span style={{ color: `var(--${line.tone === 'dim' ? 'text-secondary' : line.tone})` }}>{line.msg}</span>
-            </div>
-          ))}
-        </div>
+            </Card>
+          </Collapsible>
       </div>
     </Shell>
   );
@@ -1443,7 +1480,7 @@ export default function App() {
 // ─── Layout shell with header + theme toggle ──────────────────────────────────
 function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg-root)', padding: '28px 20px 60px' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg-root)', padding: '28px 20px 60px', fontFamily: FONT_UI }}>
       <div style={{ maxWidth: '960px', margin: '0 auto' }}>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -1451,12 +1488,12 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         }}>
           <div>
             <a href="/" style={{ textDecoration: 'none' }}>
-              <div style={{ fontSize: '17px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-                Zero-Knowledge <span style={{ color: 'var(--accent)' }}>Note Vault</span>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Secure Note <span style={{ color: 'var(--accent)' }}>Vault</span>
               </div>
             </a>
-            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              AES-256-GCM, client-side only — the server never holds a decryption key
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              AES-256-GCM, encrypted in your browser — the server never holds a decryption key
             </div>
           </div>
           <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
@@ -1475,8 +1512,8 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
 
         <ContactFooter />
 
-        <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-          Zero-Knowledge Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
+        <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
+          Secure Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>
@@ -1486,14 +1523,14 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
 // ─── Inline icon set (no external icon library — keeps the app dependency-free) ──
 function IconPhone() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z" />
     </svg>
   );
 }
 function IconMail() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
       <path d="m22 6-10 7L2 6" />
     </svg>
@@ -1501,28 +1538,28 @@ function IconMail() {
 }
 function IconLinkedIn() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.38-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45z" />
     </svg>
   );
 }
 function IconGitHub() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.4 7.86 10.93.57.1.78-.25.78-.55 0-.27-.01-1.16-.02-2.1-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.74.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.07 11.07 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.64 1.58.24 2.75.12 3.04.74.81 1.19 1.83 1.19 3.09 0 4.41-2.7 5.39-5.26 5.67.41.36.78 1.06.78 2.15 0 1.55-.01 2.8-.01 3.18 0 .31.21.66.79.55A10.51 10.51 0 0 0 23.5 12c0-6.35-5.15-11.5-11.5-11.5z" />
     </svg>
   );
 }
 function IconMedium() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <path d="M2.5 6.5c0-.5-.02-.9-.4-1.32L.4 3.3V3h6.36l4.92 10.78L16.04 3h6.06v.3l-1.45 1.4a.43.43 0 0 0-.16.41v10.36c0 .1.04.32.16.41l1.42 1.4v.3h-7.13v-.3l1.47-1.43c.14-.14.14-.18.14-.41V6.93l-4.1 10.41h-.55L7.18 6.93v6.97c-.04.3.06.6.27.82l1.91 2.32v.3H3.8v-.3l1.91-2.32a.97.97 0 0 0 .25-.82V6.5z" />
     </svg>
   );
 }
 function IconCode() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="m16 18 6-6-6-6" />
       <path d="m8 6-6 6 6 6" />
     </svg>
@@ -1539,7 +1576,8 @@ function ContactLink({ href, icon, label }) {
         display: 'inline-flex', alignItems: 'center', gap: '7px',
         padding: '7px 13px', border: '1px solid var(--border-base)',
         borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
-        fontSize: '11.5px', fontWeight: 500, textDecoration: 'none',
+        fontSize: '12.5px', fontWeight: 500, textDecoration: 'none',
+        fontFamily: FONT_UI,
         transition: 'border-color 150ms ease, color 150ms ease',
         whiteSpace: 'nowrap',
       }}
@@ -1557,10 +1595,10 @@ function ContactFooter() {
     <div style={{
       marginTop: '32px', paddingTop: '22px', borderTop: '1px solid var(--border-base)',
     }}>
-      <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', letterSpacing: '0.4px', fontWeight: 600, marginBottom: '12px', textAlign: 'center' }}>
-        CONTACT THE DEVELOPER
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '12px', textAlign: 'center' }}>
+        Contact the developer
       </div>
-      <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '14px' }}>
+      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', textAlign: 'center', marginBottom: '14px' }}>
         Built by <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Aditya Kumar</span>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px' }}>
@@ -1577,6 +1615,83 @@ function ContactFooter() {
   );
 }
 
+function RadioCard({ active, onClick, title, subtitle }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flex: 1, textAlign: 'left', padding: '14px 16px', cursor: 'pointer',
+        background: active ? 'var(--accent-soft)' : 'var(--bg-input)',
+        border: `1.5px solid ${active ? 'var(--accent)' : 'var(--border-base)'}`,
+        borderRadius: 'var(--radius-md)', fontFamily: FONT_UI,
+        transition: 'all 150ms ease', display: 'flex', alignItems: 'flex-start', gap: '10px',
+      }}
+    >
+      <span style={{
+        marginTop: '2px', width: '16px', height: '16px', borderRadius: '50%', flexShrink: 0,
+        border: `2px solid ${active ? 'var(--accent)' : 'var(--border-base)'}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {active && <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent)' }} />}
+      </span>
+      <span>
+        <div style={{ fontSize: '14px', fontWeight: 600, color: active ? 'var(--accent)' : 'var(--text-primary)' }}>{title}</div>
+        <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>{subtitle}</div>
+      </span>
+    </button>
+  );
+}
+
+function Switch({ checked, onChange, label, description }) {
+  return (
+    <label style={{
+      display: 'flex', alignItems: 'flex-start', gap: '12px', cursor: 'pointer',
+      padding: '10px 0', fontFamily: FONT_UI,
+    }}>
+      <span
+        onClick={onChange}
+        style={{
+          position: 'relative', width: '38px', height: '22px', borderRadius: '999px', flexShrink: 0, marginTop: '1px',
+          background: checked ? 'var(--accent)' : 'var(--border-base)',
+          transition: 'background 150ms ease',
+        }}
+      >
+        <span style={{
+          position: 'absolute', top: '2px', left: checked ? '18px' : '2px',
+          width: '18px', height: '18px', borderRadius: '50%', background: '#fff',
+          transition: 'left 150ms ease', boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+        }} />
+      </span>
+      <span>
+        <div style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+        {description && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.45 }}>{description}</div>}
+      </span>
+    </label>
+  );
+}
+
+function Collapsible({ open, onToggle, label, openLabel, children }) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '6px', background: 'transparent',
+          border: 'none', color: 'var(--accent)', fontFamily: FONT_UI, fontSize: '13px',
+          fontWeight: 600, cursor: 'pointer', padding: '6px 0',
+        }}
+      >
+        <span style={{
+          display: 'inline-block', transition: 'transform 150ms ease',
+          transform: open ? 'rotate(90deg)' : 'rotate(0deg)', fontSize: '11px',
+        }}>▶</span>
+        {open ? (openLabel || label) : label}
+      </button>
+      {open && <div style={{ marginTop: '8px' }}>{children}</div>}
+    </div>
+  );
+}
+
 function ModeButton({ active, onClick, children }) {
   return (
     <button
@@ -1587,8 +1702,8 @@ function ModeButton({ active, onClick, children }) {
         border: `1px solid ${active ? 'var(--accent)' : 'var(--border-base)'}`,
         color: active ? 'var(--accent)' : 'var(--text-secondary)',
         borderRadius: 'var(--radius-sm)',
-        fontFamily: 'inherit', fontSize: '11.5px', fontWeight: 600,
-        transition: 'all var(--transition)',
+        fontFamily: FONT_UI, fontSize: '12.5px', fontWeight: 600,
+        transition: 'all 150ms ease', cursor: 'pointer',
       }}
     >
       {children}

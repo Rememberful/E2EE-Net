@@ -1489,7 +1489,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
           <div>
             <a href="/" style={{ textDecoration: 'none' }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                Secure Note <span style={{ color: 'var(--accent)' }}>Vault</span>
+                Zero-Knowledge Note <span style={{ color: 'var(--accent)' }}>Vault</span>
               </div>
             </a>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -1513,7 +1513,7 @@ function Shell({ children, theme, onToggleTheme, serverStatus, minimal }) {
         <ContactFooter />
 
         <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
-          Secure Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
+          Zero-Knowledge Note Vault v4.2.0 — FastAPI + React — AES-256-GCM, keys never leave the browser
         </div>
       </div>
     </div>
